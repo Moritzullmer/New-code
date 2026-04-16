@@ -5,14 +5,17 @@ Option Explicit
 ' ENTITY FILE ORGANIZER
 '
 ' Reads a mapping workbook listing entities with TB codes and GL
-' names, then scans a source root whose immediate subfolders are
-' entity folders (each with TB 24/, TB 25/, GL/ subfolders).  For
+' names, scans a source root whose immediate subfolders are
+' entity folders (each with TB 24/ and TB 25/ subfolders), and
+' filters one shared consolidated GL workbook per entity.  For
 ' every mapping row it produces an output folder named after the
-' entity, containing:
-'   - the matched TB 24 file (copied unchanged)
-'   - the matched TB 25 file (copied unchanged)
-'   - GL.xlsx = merge of every matched GL source (headers from the
-'     first file, all subsequent files' rows 2..last appended).
+' entity, with three subfolders:
+'   <entity>\TB 24\  - the matched TB 24 file (copied unchanged)
+'   <entity>\TB 25\  - the matched TB 25 file (copied unchanged)
+'   <entity>\GL\GL.xlsx
+'                    - the consolidated GL restricted to rows
+'                      whose column H equals one of that row's
+'                      mapping GL names (header row always kept).
 '
 ' Mapping layout on sheet 1 of the mapping workbook:
 '   Row 3 headers:   A=Entity Name  B=TB #   C=GL 1  D=GL 2  E=GL 3 ...
@@ -21,13 +24,16 @@ Option Explicit
 '
 ' Matching rules:
 '   - TB file:  cell A1 equals the row's TB # (Trim, case-insensitive).
-'   - GL file:  cell H2 equals the row's GL name (Trim, case-insensitive).
+'   - GL rows:  column H equals one of the row's GL names
+'               (Trim, case-insensitive).
 ' =============================================================
 
 ' =============================================================
 ' PUBLIC ENTRY POINT
-' Prompts for mapping workbook, source root, and output root,
-' then builds one output subfolder per mapping row.
+' Prompts for four paths (mapping workbook, source root,
+' consolidated GL workbook, output root) and builds one output
+' subfolder per mapping row, each with TB 24\, TB 25\, GL\
+' subfolders holding the matched files.
 ' =============================================================
 Public Sub Main()
 
@@ -39,6 +45,10 @@ Public Sub Main()
     Dim sourceRoot As String
     sourceRoot = PickFolder("Select the source root folder (contains entity subfolders)")
     If sourceRoot = "" Then Exit Sub
+
+    Dim glPath As String
+    glPath = PickFile("Select the consolidated GL workbook")
+    If glPath = "" Then Exit Sub
 
     Dim outputRoot As String
     outputRoot = PickFolder("Select the output root folder")
@@ -68,6 +78,12 @@ Public Sub Main()
     ' ---- Pre-scan TB files (one sweep across both years) ----
     Dim tbIndex As Object
     Set tbIndex = BuildTBIndex(sourceRoot)
+
+    ' ---- Load the consolidated GL once into memory ----
+    Dim glData As Variant   ' 1-based 2D array; empty Variant if load failed
+    Dim glLoadMsg As String
+    LoadConsolidatedGL glPath, glData, glLoadMsg
+    If glLoadMsg <> "" Then warnings.Add "Consolidated GL: " & glLoadMsg
 
     ' ---- Process each mapping row ----
     Dim i As Long
@@ -102,12 +118,18 @@ Public Sub Main()
 
         Dim outFolder As String : outFolder = outputRoot & "\" & sanitized
         If Dir(outFolder, vbDirectory) = "" Then MkDir outFolder
+        Dim outTB24 As String : outTB24 = outFolder & "\TB 24"
+        Dim outTB25 As String : outTB25 = outFolder & "\TB 25"
+        Dim outGL As String : outGL = outFolder & "\GL"
+        If Dir(outTB24, vbDirectory) = "" Then MkDir outTB24
+        If Dir(outTB25, vbDirectory) = "" Then MkDir outTB25
+        If Dir(outGL, vbDirectory) = "" Then MkDir outGL
 
         ' --- TB 24 copy ---
         If tb24File = "" Then
             rowWarn = rowWarn & "TB 24 missing; "
         Else
-            Dim tb24Dst As String : tb24Dst = outFolder & "\" & tb24File
+            Dim tb24Dst As String : tb24Dst = outTB24 & "\" & tb24File
             On Error Resume Next
             If Dir(tb24Dst) <> "" Then Kill tb24Dst
             Err.Clear
@@ -123,7 +145,7 @@ Public Sub Main()
         If tb25File = "" Then
             rowWarn = rowWarn & "TB 25 missing; "
         Else
-            Dim tb25Dst As String : tb25Dst = outFolder & "\" & tb25File
+            Dim tb25Dst As String : tb25Dst = outTB25 & "\" & tb25File
             On Error Resume Next
             If Dir(tb25Dst) <> "" Then Kill tb25Dst
             Err.Clear
@@ -135,28 +157,29 @@ Public Sub Main()
             On Error GoTo Cleanup
         End If
 
-        ' --- GL merge ---
-        Dim mergedPath As String : mergedPath = outFolder & "\GL.xlsx"
+        ' --- GL filter (from the consolidated GL loaded in memory) ---
+        Dim mergedPath As String : mergedPath = outGL & "\GL.xlsx"
         On Error Resume Next
         If Dir(mergedPath) <> "" Then Kill mergedPath
         On Error GoTo Cleanup
 
         Dim expectedGL As Long : expectedGL = CountNonEmpty(glNames)
-        Dim mergedCount As Long : mergedCount = 0
-        On Error Resume Next
-        mergedCount = MergeGLFiles(entityFolder & "\GL", glNames, mergedPath)
-        If Err.Number <> 0 Then
-            rowWarn = rowWarn & "GL merge failed (" & Err.Description & "); "
-            Err.Clear
-        End If
-        On Error GoTo Cleanup
         If expectedGL = 0 Then
             rowWarn = rowWarn & "no GL names in mapping; "
-        ElseIf mergedCount = 0 Then
-            rowWarn = rowWarn & "no GL files matched H2 in " & entityFolder & "\GL; "
-        ElseIf mergedCount < expectedGL Then
-            rowWarn = rowWarn & "only " & mergedCount & " of " & _
-                      expectedGL & " GL files matched; "
+        ElseIf IsEmpty(glData) Then
+            rowWarn = rowWarn & "consolidated GL not loaded; skipping filter; "
+        Else
+            Dim keptRows As Long : keptRows = 0
+            On Error Resume Next
+            keptRows = FilterConsolidatedGL(glData, glNames, mergedPath)
+            If Err.Number <> 0 Then
+                rowWarn = rowWarn & "GL filter failed (" & Err.Description & "); "
+                Err.Clear
+            End If
+            On Error GoTo Cleanup
+            If keptRows = 0 Then
+                rowWarn = rowWarn & "no GL rows matched column H for this entity; "
+            End If
         End If
 
         okCount = okCount + 1
@@ -474,123 +497,146 @@ Private Sub IndexTBYear(dict As Object, entityFolder As String, _
 End Sub
 
 ' =============================================================
-' MergeAppend
-' Appends rows 2..srcLastRow of wsSource below the current last
-' row of wsTarget, across columns 1..srcLastCol.
+' LoadConsolidatedGL
+' Opens the consolidated GL workbook once and reads the used
+' range of sheet 1 into a 1-based 2D Variant array via
+' Range.Value.
 '
-' Uses a single .Value = .Value assignment, which is much faster
-' than Copy/PasteSpecial and avoids clipboard side-effects.
+' If the workbook is already open in the current Excel instance
+' the existing Workbook object is reused and NOT closed.
+'
+' Output:
+'   glData - 2D Variant array (rows x cols); Empty on failure.
+'   errMsg - "" on success, otherwise a human-readable reason.
+'            (glData stays Empty when errMsg is non-empty so the
+'            caller can fall back gracefully per row.)
 ' =============================================================
-Private Sub MergeAppend(wsTarget As Worksheet, wsSource As Worksheet)
-    Dim srcLastRow As Long : srcLastRow = LastUsedRow(wsSource)
-    Dim srcLastCol As Long : srcLastCol = LastUsedCol(wsSource)
-    If srcLastRow < 2 Or srcLastCol < 1 Then Exit Sub
+Private Sub LoadConsolidatedGL(path As String, ByRef glData As Variant, _
+                               ByRef errMsg As String)
+    glData = Empty
+    errMsg = ""
 
-    Dim tgtLastRow As Long : tgtLastRow = LastUsedRow(wsTarget)
-    Dim dstStart As Long : dstStart = tgtLastRow + 1
-    Dim nRows As Long : nRows = srcLastRow - 1 ' rows 2..srcLastRow inclusive
+    Dim nameOnly As String : nameOnly = Mid(path, InStrRev(path, "\") + 1)
+    Dim wb As Workbook
+    Dim alreadyOpen As Boolean
 
-    Dim srcRange As Range
-    Set srcRange = wsSource.Range(wsSource.Cells(2, 1), _
-                                  wsSource.Cells(srcLastRow, srcLastCol))
+    On Error Resume Next
+    Set wb = Workbooks(nameOnly)
+    On Error GoTo 0
+    alreadyOpen = Not (wb Is Nothing)
 
-    Dim dstRange As Range
-    Set dstRange = wsTarget.Range(wsTarget.Cells(dstStart, 1), _
-                                  wsTarget.Cells(dstStart + nRows - 1, srcLastCol))
+    If Not alreadyOpen Then
+        On Error Resume Next
+        Set wb = Workbooks.Open(path, ReadOnly:=True, UpdateLinks:=0)
+        On Error GoTo 0
+        If wb Is Nothing Then
+            errMsg = "could not open consolidated GL"
+            Exit Sub
+        End If
+    End If
 
-    dstRange.Value = srcRange.Value
+    Dim ws As Worksheet : Set ws = wb.Sheets(1)
+    Dim lastRow As Long : lastRow = LastUsedRow(ws)
+    Dim lastCol As Long : lastCol = LastUsedCol(ws)
+    If lastRow < 1 Or lastCol < 8 Then
+        errMsg = "consolidated GL appears empty or has fewer than 8 columns"
+        If Not alreadyOpen Then wb.Close SaveChanges:=False
+        Exit Sub
+    End If
+
+    ' Range.Value on a single cell returns a scalar, not a 2D array,
+    ' so promote that edge case manually.
+    If lastRow = 1 And lastCol = 1 Then
+        ReDim glData(1 To 1, 1 To 1)
+        glData(1, 1) = ws.Cells(1, 1).Value
+    Else
+        glData = ws.Range(ws.Cells(1, 1), ws.Cells(lastRow, lastCol)).Value
+    End If
+
+    If Not alreadyOpen Then wb.Close SaveChanges:=False
 End Sub
 
 ' =============================================================
-' MergeGLFiles
-' Resolves each mapping GL name (via cell H2 = name) to a file in
-' entityGLFolder, then writes a merged workbook to outputPath:
-'   - First matched file becomes the base (header row preserved).
-'   - Subsequent matched files: rows 2..last appended in order.
+' FilterConsolidatedGL
+' Writes a new workbook at outputPath containing:
+'   - Row 1 from glData (header, always kept).
+'   - Every subsequent row whose column H (index 8) value equals
+'     one of the non-empty mapping GL names (Trim +
+'     case-insensitive exact equality).
 '
-' Returns the number of GL source files merged (0 = none).
+' Returns the number of data rows kept (header excluded).
 '
-' The source GL files are opened ReadOnly and never saved back;
-' the merged workbook is written via SaveAs xlOpenXMLWorkbook so
-' the result is always a genuine .xlsx regardless of source
-' extension (.xls / .xlsm / .xlsx).
+' Uses a single .Value = 2D-Variant assignment on the destination
+' range to keep the write fast and avoid clipboard side-effects.
 ' =============================================================
-Private Function MergeGLFiles(entityGLFolder As String, _
-                              glNames As Variant, _
-                              outputPath As String) As Long
-    MergeGLFiles = 0
-    If Dir(entityGLFolder, vbDirectory) = "" Then Exit Function
+Private Function FilterConsolidatedGL(ByRef glData As Variant, _
+                                      glNames As Variant, _
+                                      outputPath As String) As Long
+    FilterConsolidatedGL = 0
 
-    ' ---- Collect every GL file in the folder (Dir is not reentrant) ----
-    Dim glFiles As New Collection
-    AddFilesByPattern glFiles, entityGLFolder, "*.xlsx"
-    AddFilesByPattern glFiles, entityGLFolder, "*.xlsm"
-    AddFilesByPattern glFiles, entityGLFolder, "*.xls"
-    If glFiles.Count = 0 Then Exit Function
+    ' Mapping GL names -> case-insensitive lookup set
+    Dim nameDict As Object
+    Set nameDict = CreateObject("Scripting.Dictionary")
+    nameDict.CompareMode = 1 ' vbTextCompare
 
-    ' ---- Build H2-value -> filename index ----
-    Dim h2map As Object
-    Set h2map = CreateObject("Scripting.Dictionary")
-    h2map.CompareMode = 1 ' vbTextCompare
-
-    Dim fn As Variant
-    For Each fn In glFiles
-        Dim wb As Workbook
-        Set wb = Nothing
-        On Error Resume Next
-        Set wb = Workbooks.Open(entityGLFolder & "\" & CStr(fn), _
-                                ReadOnly:=True, UpdateLinks:=0)
-        On Error GoTo 0
-        If Not wb Is Nothing Then
-            Dim h2 As String
-            h2 = Trim(CStr(wb.Sheets(1).Cells(2, 8).Value))
-            wb.Close SaveChanges:=False
-            Set wb = Nothing
-            If h2 <> "" And Not h2map.Exists(h2) Then h2map(h2) = CStr(fn)
+    Dim k As Long
+    For k = LBound(glNames) To UBound(glNames)
+        Dim nm As String : nm = Trim(CStr(glNames(k)))
+        If nm <> "" Then
+            If Not nameDict.Exists(nm) Then nameDict.Add nm, True
         End If
-    Next fn
+    Next k
+    If nameDict.Count = 0 Then Exit Function
 
-    ' ---- Resolve each mapping GL name, preserving mapping order ----
-    Dim resolved As New Collection
+    Dim nRows As Long : nRows = UBound(glData, 1)
+    Dim nCols As Long : nCols = UBound(glData, 2)
+    If nRows < 1 Or nCols < 8 Then Exit Function
+
+    ' Count matches first so we can size the output array exactly.
+    Dim keep As Long : keep = 0
     Dim i As Long
-    For i = LBound(glNames) To UBound(glNames)
-        Dim gname As String : gname = Trim(CStr(glNames(i)))
-        If gname <> "" Then
-            If h2map.Exists(gname) Then resolved.Add CStr(h2map(gname))
+    For i = 2 To nRows
+        Dim h As String : h = Trim(CStr(glData(i, 8)))
+        If h <> "" Then
+            If nameDict.Exists(h) Then keep = keep + 1
         End If
     Next i
-    If resolved.Count = 0 Then Exit Function
 
-    ' ---- Open first match, append the rest, SaveAs output as .xlsx ----
-    Dim outWb As Workbook
-    Set outWb = Nothing
-    On Error Resume Next
-    Set outWb = Workbooks.Open(entityGLFolder & "\" & CStr(resolved(1)), _
-                               ReadOnly:=True, UpdateLinks:=0)
-    On Error GoTo 0
-    If outWb Is Nothing Then Exit Function
-    Dim outWs As Worksheet : Set outWs = outWb.Sheets(1)
+    ' Build output: header row + kept rows (header always kept,
+    ' even when no data rows matched).
+    Dim outRows As Long : outRows = keep + 1
+    Dim outArr() As Variant
+    ReDim outArr(1 To outRows, 1 To nCols)
 
-    Dim j As Long
-    For j = 2 To resolved.Count
-        Dim srcWb As Workbook
-        Set srcWb = Nothing
-        On Error Resume Next
-        Set srcWb = Workbooks.Open(entityGLFolder & "\" & CStr(resolved(j)), _
-                                   ReadOnly:=True, UpdateLinks:=0)
-        On Error GoTo 0
-        If Not srcWb Is Nothing Then
-            MergeAppend outWs, srcWb.Sheets(1)
-            srcWb.Close SaveChanges:=False
-            Set srcWb = Nothing
+    Dim c As Long
+    For c = 1 To nCols
+        outArr(1, c) = glData(1, c)
+    Next c
+
+    Dim dstRow As Long : dstRow = 1
+    For i = 2 To nRows
+        Dim h2 As String : h2 = Trim(CStr(glData(i, 8)))
+        If h2 <> "" Then
+            If nameDict.Exists(h2) Then
+                dstRow = dstRow + 1
+                For c = 1 To nCols
+                    outArr(dstRow, c) = glData(i, c)
+                Next c
+            End If
         End If
-    Next j
+    Next i
+
+    ' Write to a brand-new workbook and SaveAs .xlsx.
+    Dim newWb As Workbook
+    Set newWb = Workbooks.Add
+    Dim newWs As Worksheet : Set newWs = newWb.Sheets(1)
+    newWs.Range(newWs.Cells(1, 1), newWs.Cells(outRows, nCols)).Value = outArr
 
     Application.DisplayAlerts = False
-    outWb.SaveAs outputPath, xlOpenXMLWorkbook
+    newWb.SaveAs outputPath, xlOpenXMLWorkbook
     Application.DisplayAlerts = True
-    outWb.Close SaveChanges:=False
-    Set outWb = Nothing
+    newWb.Close SaveChanges:=False
+    Set newWb = Nothing
 
-    MergeGLFiles = resolved.Count
+    FilterConsolidatedGL = keep
 End Function
