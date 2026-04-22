@@ -23,7 +23,7 @@ Private m_SkipLog As String
 ' UDT — one instance per entity found in row 15
 ' =============================================================
 Private Type EntityInfo
-    Name        As String   ' raw text from row 15 (= folder name on disk)
+    EntityName  As String   ' raw text from row 15 (= folder name on disk)
     FirstCol    As Long     ' leftmost column of entity span in row 15
     LastCol     As Long     ' rightmost column of entity span
     InsertCol   As Long     ' column where "as per TB" will be inserted (= LastCol + 1)
@@ -40,20 +40,26 @@ End Type
 ' =============================================================
 Public Sub ImportTB25Balances()
 
+    Dim fd             As FileDialog
+    Dim parentFolder   As String
+    Dim wsBS           As Worksheet
+    Dim entities()     As EntityInfo
+    Dim entCount       As Long
+    Dim processedCount As Long
+    Dim i              As Long
+    Dim tbPath         As String
+    Dim wsTB           As Worksheet
+    Dim errMsg         As String
+
     m_SkipLog = ""  ' clear log from any previous run
 
     ' ---- Select parent folder ----
-    Dim fd As FileDialog
     Set fd = Application.FileDialog(msoFileDialogFolderPicker)
     fd.Title = "Select the parent folder containing entity sub-folders"
     If fd.Show <> -1 Then Exit Sub
-
-    Dim parentFolder As String
     parentFolder = fd.SelectedItems(1)
 
     ' ---- Validate "Conso BS 25" sheet ----
-    Dim wsBS As Worksheet
-    Set wsBS = Nothing
     On Error Resume Next
     Set wsBS = ThisWorkbook.Sheets(CONSO_SHEET)
     On Error GoTo 0
@@ -65,11 +71,9 @@ Public Sub ImportTB25Balances()
 
     On Error GoTo ErrHandler
 
-    SetAppPerformance True
+    AppPerfOn
 
     ' ---- Discover entities from row 15 ----
-    Dim entities() As EntityInfo
-    Dim entCount   As Long
     FindEntityColumns wsBS, entities, entCount
 
     If entCount = 0 Then
@@ -79,18 +83,15 @@ Public Sub ImportTB25Balances()
     End If
 
     ' ---- Phase 1: Import TB25 files (left to right, before any column insertion) ----
-    Dim i          As Long
-    Dim processedCount As Long
     For i = 0 To entCount - 1
-        Dim tbPath As String
-        tbPath = FindTB25File(parentFolder, entities(i).Name)
+        tbPath = FindTB25File(parentFolder, entities(i).EntityName)
         If tbPath = "" Then
-            LogSkip "Entity '" & entities(i).Name & "': TB25 file not found under '" & _
-                    parentFolder & "\" & entities(i).Name & "\" & TB_SUBFOLDER & "' — skipped."
+            LogSkip "Entity '" & entities(i).EntityName & "': TB25 file not found under '" & _
+                    parentFolder & "\" & entities(i).EntityName & "\" & TB_SUBFOLDER & "' — skipped."
             entities(i).Skipped = True
         Else
             If Not ImportSheetData(tbPath, entities(i).TBSheetName) Then
-                LogSkip "Entity '" & entities(i).Name & "': could not open '" & tbPath & "' — skipped."
+                LogSkip "Entity '" & entities(i).EntityName & "': could not open '" & tbPath & "' — skipped."
                 entities(i).Skipped = True
             Else
                 processedCount = processedCount + 1
@@ -101,7 +102,6 @@ Public Sub ImportTB25Balances()
     ' ---- Phase 2: Insert "as per TB" columns (RIGHT TO LEFT to prevent index drift) ----
     For i = entCount - 1 To 0 Step -1
         If Not entities(i).Skipped Then
-            Dim wsTB As Worksheet
             Set wsTB = Nothing
             On Error Resume Next
             Set wsTB = ThisWorkbook.Sheets(entities(i).TBSheetName)
@@ -113,7 +113,7 @@ Public Sub ImportTB25Balances()
     Next i
 
 CleanExit:
-    SetAppPerformance False
+    AppPerfOff
     If m_SkipLog <> "" Then
         MsgBox "Import complete (" & processedCount & " entit(y/ies) processed) with warnings:" & _
                vbCrLf & vbCrLf & m_SkipLog, vbExclamation, "TB25 Import — Warnings"
@@ -124,8 +124,8 @@ CleanExit:
     Exit Sub
 
 ErrHandler:
-    Dim errMsg As String : errMsg = Err.Description
-    SetAppPerformance False
+    errMsg = Err.Description
+    AppPerfOff
     MsgBox "Unexpected error:" & vbCrLf & errMsg, vbExclamation, "TB25 Import Error"
 
 End Sub
@@ -140,12 +140,19 @@ End Sub
 ' account-bearing row with the sum from the TB25 sheet.
 Private Sub InsertAndFillColumn(wsBS As Worksheet, ent As EntityInfo, wsTB As Worksheet)
 
-    Dim insertAt As Long : insertAt = ent.InsertCol
+    Dim insertAt    As Long
+    Dim lastDataRow As Long
+    Dim r           As Long
+    Dim acctVal     As String
+
+    insertAt = ent.InsertCol
 
     ' Idempotency: if the cell at (ROW_ENTITY_NAME, insertAt) already says
     ' "as per TB" this column was written in a prior run — delete it first.
     If Trim(CStr(wsBS.Cells(ROW_ENTITY_NAME, insertAt).Value)) = "as per TB" Then
+        Application.DisplayAlerts = False
         wsBS.Columns(insertAt).Delete Shift:=xlToLeft
+        Application.DisplayAlerts = True
     End If
 
     ' Insert a blank column, pushing existing content to the right.
@@ -155,10 +162,8 @@ Private Sub InsertAndFillColumn(wsBS As Worksheet, ent As EntityInfo, wsTB As Wo
     wsBS.Cells(ROW_ENTITY_NAME, insertAt).Value = "as per TB"
 
     ' Fill data rows.
-    Dim lastDataRow As Long : lastDataRow = LastUsedRow(wsBS, COL_ACCOUNT)
-    Dim r           As Long
+    lastDataRow = LastUsedRow(wsBS, COL_ACCOUNT)
     For r = ROW_DATA_START To lastDataRow
-        Dim acctVal As String
         acctVal = Trim(CStr(wsBS.Cells(r, COL_ACCOUNT).Value))
         If IsAccountRow(acctVal) Then
             wsBS.Cells(r, insertAt).Value = SumAccountInTB(wsTB, acctVal)
@@ -180,30 +185,32 @@ Private Sub FindEntityColumns(wsBS As Worksheet, _
                                ByRef entities() As EntityInfo, _
                                ByRef entCount As Long)
 
+    Dim lastCol  As Long
+    Dim c        As Long
+    Dim cellVal  As String
+    Dim spanCols As Long
+
     entCount = 0
     ReDim entities(0)
 
-    Dim lastCol As Long
     lastCol = wsBS.Cells(ROW_ENTITY_NAME, wsBS.Columns.Count).End(xlToLeft).Column
 
-    Dim c As Long : c = 2   ' col A is account numbers — start from B
+    c = 2   ' col A is account numbers — start scanning from col B
     Do While c <= lastCol
-        Dim cellVal As String
         cellVal = Trim(CStr(wsBS.Cells(ROW_ENTITY_NAME, c).Value))
         If cellVal <> "" Then
-            Dim span As Long
-            span = wsBS.Cells(ROW_ENTITY_NAME, c).MergeArea.Columns.Count
+            spanCols = wsBS.Cells(ROW_ENTITY_NAME, c).MergeArea.Columns.Count
 
             ReDim Preserve entities(entCount)
-            entities(entCount).Name        = cellVal
+            entities(entCount).EntityName  = cellVal
             entities(entCount).FirstCol    = c
-            entities(entCount).LastCol     = c + span - 1
-            entities(entCount).InsertCol   = c + span   ' immediately after entity span
+            entities(entCount).LastCol     = c + spanCols - 1
+            entities(entCount).InsertCol   = c + spanCols   ' immediately after entity span
             entities(entCount).TBSheetName = SafeSheetName(cellVal)
             entities(entCount).Skipped     = False
             entCount = entCount + 1
 
-            c = c + span   ' jump past the entire span
+            c = c + spanCols   ' jump past the entire merged span
         Else
             c = c + 1
         End If
@@ -220,7 +227,18 @@ End Sub
 Private Function FindTB25File(parentFolder As String, entityName As String) As String
 
     Dim tb25Root As String
+    Dim f        As String
+    Dim subDirs() As String
+    Dim subCount  As Long
+    Dim sd        As String
+    Dim sdFull    As String
+    Dim sdAttr    As Long
+    Dim j         As Long
+    Dim subFull   As String
+    Dim g         As String
+
     tb25Root = parentFolder & "\" & entityName & "\" & TB_SUBFOLDER
+    subCount = 0
 
     ' Verify the TB 25 folder exists.
     If Dir(tb25Root, vbDirectory) = "" Then
@@ -229,28 +247,23 @@ Private Function FindTB25File(parentFolder As String, entityName As String) As S
     End If
 
     ' Pass 1a: look directly in the TB 25 folder.
-    Dim f As String
     f = Dir(tb25Root & "\*.xlsx")
     If f <> "" Then
         FindTB25File = tb25Root & "\" & f
         Exit Function
     End If
 
-    ' Pass 1b: collect sub-directory names (Dir would be reset by nested calls).
-    Dim subDirs()  As String
-    Dim subCount   As Long
-    subCount = 0
+    ' Pass 1b: collect sub-directory names before doing nested Dir calls.
     ReDim subDirs(0)
-
-    Dim sd As String
     sd = Dir(tb25Root & "\*", vbDirectory)
     Do While sd <> ""
         If sd <> "." And sd <> ".." Then
-            Dim sdFull As String : sdFull = tb25Root & "\" & sd
+            sdFull = tb25Root & "\" & sd
+            sdAttr = 0
             On Error Resume Next
-            Dim attr As Long : attr = GetAttr(sdFull)
+            sdAttr = GetAttr(sdFull)
             On Error GoTo 0
-            If (attr And vbDirectory) = vbDirectory Then
+            If (sdAttr And vbDirectory) = vbDirectory Then
                 ReDim Preserve subDirs(subCount)
                 subDirs(subCount) = sd
                 subCount = subCount + 1
@@ -260,10 +273,9 @@ Private Function FindTB25File(parentFolder As String, entityName As String) As S
     Loop
 
     ' Pass 2: search each sub-directory for an xlsx file.
-    Dim j As Long
     For j = 0 To subCount - 1
-        Dim subFull As String : subFull = tb25Root & "\" & subDirs(j)
-        Dim g As String : g = Dir(subFull & "\*.xlsx")
+        subFull = tb25Root & "\" & subDirs(j)
+        g = Dir(subFull & "\*.xlsx")
         If g <> "" Then
             FindTB25File = subFull & "\" & g
             Exit Function
@@ -285,6 +297,12 @@ End Function
 ' Returns True on success, False on failure.
 Private Function ImportSheetData(filePath As String, sheetName As String) As Boolean
 
+    Dim wbSrc As Workbook
+    Dim wsSrc As Worksheet
+    Dim wsDst As Worksheet
+    Dim lastR As Long
+    Dim lastC As Long
+
     ' Idempotency: delete an existing sheet with the same name.
     If SheetExists(ThisWorkbook, sheetName) Then
         Application.DisplayAlerts = False
@@ -293,7 +311,6 @@ Private Function ImportSheetData(filePath As String, sheetName As String) As Boo
     End If
 
     ' Open the source workbook read-only.
-    Dim wbSrc As Workbook
     On Error Resume Next
     Set wbSrc = Workbooks.Open(Filename:=filePath, ReadOnly:=True, UpdateLinks:=False)
     On Error GoTo 0
@@ -302,17 +319,14 @@ Private Function ImportSheetData(filePath As String, sheetName As String) As Boo
         Exit Function
     End If
 
-    Dim wsSrc As Worksheet
     Set wsSrc = wbSrc.Sheets(1)
 
     ' Determine source extent.
-    Dim lastR As Long : lastR = LastUsedRow(wsSrc, TB_COL_ACCT)
-    Dim lastC As Long
+    lastR = LastUsedRow(wsSrc, TB_COL_ACCT)
     lastC = wsSrc.Cells(1, wsSrc.Columns.Count).End(xlToLeft).Column
     If lastC < TB_COL_SALDO Then lastC = TB_COL_SALDO  ' ensure at least col F is included
 
     ' Create destination sheet.
-    Dim wsDst As Worksheet
     Set wsDst = ThisWorkbook.Sheets.Add(After:=ThisWorkbook.Sheets(ThisWorkbook.Sheets.Count))
     wsDst.Name = sheetName
 
@@ -339,19 +353,20 @@ End Function
 ' exactly matches accountNum.  Equivalent to SUMIF.
 Private Function SumAccountInTB(wsTB As Worksheet, accountNum As String) As Double
 
+    Dim lastR As Long
+    Dim arr   As Variant
+    Dim total As Double
+    Dim r     As Long
+
     If wsTB Is Nothing Then SumAccountInTB = 0 : Exit Function
 
-    Dim lastR As Long : lastR = LastUsedRow(wsTB, TB_COL_ACCT)
+    lastR = LastUsedRow(wsTB, TB_COL_ACCT)
     If lastR < TB_ROW_DATA_START Then SumAccountInTB = 0 : Exit Function
 
-    Dim lastC As Long : lastC = TB_COL_SALDO   ' we only need up to col F
-
-    Dim arr As Variant
     arr = wsTB.Range(wsTB.Cells(TB_ROW_DATA_START, 1), _
-                     wsTB.Cells(lastR, lastC)).Value
+                     wsTB.Cells(lastR, TB_COL_SALDO)).Value
 
-    Dim total As Double : total = 0
-    Dim r     As Long
+    total = 0
     For r = 1 To UBound(arr, 1)
         If Trim(CStr(arr(r, TB_COL_ACCT))) = accountNum Then
             total = total + ParseGermanNumber(arr(r, TB_COL_SALDO))
@@ -370,7 +385,8 @@ End Function
 ' Returns True when the cell value looks like an account number:
 ' starts with a digit (0-9) AND contains a hyphen (e.g. "1111-2050").
 Private Function IsAccountRow(cellVal As Variant) As Boolean
-    Dim s As String : s = Trim(CStr(cellVal))
+    Dim s As String
+    s = Trim(CStr(cellVal))
     If Len(s) = 0 Then IsAccountRow = False : Exit Function
     IsAccountRow = (s Like "[0-9]*") And (InStr(s, "-") > 0)
 End Function
@@ -380,7 +396,8 @@ End Function
 ' sheet-name characters replaced by underscores.
 ' Result is at most 23 chars, well within Excel's 31-char limit.
 Private Function SafeSheetName(entityName As String) As String
-    Dim s As String : s = Left(entityName, 20)
+    Dim s As String
+    s = Left(entityName, 20)
     s = Replace(s, "/",  "_")
     s = Replace(s, "\",  "_")
     s = Replace(s, "?",  "_")
@@ -392,11 +409,11 @@ Private Function SafeSheetName(entityName As String) As String
 End Function
 
 ' SheetExists
-' Returns True if a sheet named 'name' already exists in wb.
-Private Function SheetExists(wb As Workbook, name As String) As Boolean
+' Returns True if a sheet named sheetName already exists in wb.
+Private Function SheetExists(wb As Workbook, sheetName As String) As Boolean
     Dim ws As Worksheet
     On Error Resume Next
-    Set ws = wb.Sheets(name)
+    Set ws = wb.Sheets(sheetName)
     On Error GoTo 0
     SheetExists = Not (ws Is Nothing)
 End Function
@@ -412,20 +429,20 @@ Private Sub LogSkip(msg As String)
     End If
 End Sub
 
-' SetAppPerformance
-' Enables (on=True) or restores (on=False) the standard
-' performance guard used throughout this project.
-Private Sub SetAppPerformance(on As Boolean)
-    If on Then
-        Application.ScreenUpdating = False
-        Application.Calculation   = xlCalculationManual
-        Application.EnableEvents  = False
-    Else
-        Application.ScreenUpdating = True
-        Application.Calculation   = xlCalculationAutomatic
-        Application.EnableEvents  = True
-        Application.DisplayAlerts = True
-    End If
+' AppPerfOn / AppPerfOff
+' Renamed from SetAppPerformance to avoid the reserved word "on"
+' as a parameter name causing a compile error.
+Private Sub AppPerfOn()
+    Application.ScreenUpdating = False
+    Application.Calculation   = xlCalculationManual
+    Application.EnableEvents  = False
+End Sub
+
+Private Sub AppPerfOff()
+    Application.ScreenUpdating = True
+    Application.Calculation   = xlCalculationAutomatic
+    Application.EnableEvents  = True
+    Application.DisplayAlerts = True
 End Sub
 
 ' LastUsedRow
@@ -440,6 +457,8 @@ End Function
 ' to a Double.  If the value is already a numeric VBA type it is
 ' returned directly without string conversion.
 Private Function ParseGermanNumber(rawVal As Variant) As Double
+    Dim s As String
+
     If IsEmpty(rawVal) Or CStr(rawVal) = "" Then
         ParseGermanNumber = 0
         Exit Function
@@ -451,7 +470,7 @@ Private Function ParseGermanNumber(rawVal As Variant) As Double
             Exit Function
     End Select
 
-    Dim s As String : s = CStr(rawVal)
+    s = CStr(rawVal)
     s = Replace(s, ".", "")    ' strip thousands separator (period)
     s = Replace(s, ",", ".")   ' convert decimal comma to dot
 
