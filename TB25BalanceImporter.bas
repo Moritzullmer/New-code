@@ -226,8 +226,8 @@ End Sub
 ' Uses a two-pass approach to avoid Dir() re-entrancy issues.
 Private Function FindTB25File(parentFolder As String, entityName As String) As String
 
-    Dim tb25Root As String
-    Dim f        As String
+    Dim tb25Root  As String
+    Dim f         As String
     Dim subDirs() As String
     Dim subCount  As Long
     Dim sd        As String
@@ -236,15 +236,17 @@ Private Function FindTB25File(parentFolder As String, entityName As String) As S
     Dim j         As Long
     Dim subFull   As String
     Dim g         As String
+    Dim chk       As String
+
+    ' Any Dir/GetAttr error (bad path chars, permissions, etc.) → treat as not found.
+    On Error GoTo NotFound
 
     tb25Root = parentFolder & "\" & entityName & "\" & TB_SUBFOLDER
     subCount = 0
 
     ' Verify the TB 25 folder exists.
-    If Dir(tb25Root, vbDirectory) = "" Then
-        FindTB25File = ""
-        Exit Function
-    End If
+    chk = Dir(tb25Root, vbDirectory)
+    If chk = "" Then GoTo NotFound
 
     ' Pass 1a: look directly in the TB 25 folder.
     f = Dir(tb25Root & "\*.xlsx")
@@ -254,6 +256,7 @@ Private Function FindTB25File(parentFolder As String, entityName As String) As S
     End If
 
     ' Pass 1b: collect sub-directory names before doing nested Dir calls.
+    ' (Nested Dir calls would reset the outer Dir iterator.)
     ReDim subDirs(0)
     sd = Dir(tb25Root & "\*", vbDirectory)
     Do While sd <> ""
@@ -262,7 +265,7 @@ Private Function FindTB25File(parentFolder As String, entityName As String) As S
             sdAttr = 0
             On Error Resume Next
             sdAttr = GetAttr(sdFull)
-            On Error GoTo 0
+            On Error GoTo NotFound
             If (sdAttr And vbDirectory) = vbDirectory Then
                 ReDim Preserve subDirs(subCount)
                 subDirs(subCount) = sd
@@ -282,6 +285,10 @@ Private Function FindTB25File(parentFolder As String, entityName As String) As S
         End If
     Next j
 
+    FindTB25File = ""
+    Exit Function
+
+NotFound:
     FindTB25File = ""
 
 End Function
@@ -303,6 +310,9 @@ Private Function ImportSheetData(filePath As String, sheetName As String) As Boo
     Dim lastR As Long
     Dim lastC As Long
 
+    ' Any unexpected error → close source if open, return False (soft skip).
+    On Error GoTo ImportFailed
+
     ' Idempotency: delete an existing sheet with the same name.
     If SheetExists(ThisWorkbook, sheetName) Then
         Application.DisplayAlerts = False
@@ -311,13 +321,12 @@ Private Function ImportSheetData(filePath As String, sheetName As String) As Boo
     End If
 
     ' Open the source workbook read-only.
-    On Error Resume Next
+    ' DisplayAlerts=False suppresses "update links?" dialogs.
+    Application.DisplayAlerts = False
     Set wbSrc = Workbooks.Open(Filename:=filePath, ReadOnly:=True, UpdateLinks:=False)
-    On Error GoTo 0
-    If wbSrc Is Nothing Then
-        ImportSheetData = False
-        Exit Function
-    End If
+    Application.DisplayAlerts = True
+
+    If wbSrc Is Nothing Then GoTo ImportFailed
 
     Set wsSrc = wbSrc.Sheets(1)
 
@@ -344,6 +353,13 @@ Private Function ImportSheetData(filePath As String, sheetName As String) As Boo
     Set wbSrc = Nothing
 
     ImportSheetData = True
+    Exit Function
+
+ImportFailed:
+    On Error Resume Next
+    If Not wbSrc Is Nothing Then wbSrc.Close SaveChanges:=False
+    Application.DisplayAlerts = True
+    ImportSheetData = False
 
 End Function
 
