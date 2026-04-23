@@ -135,40 +135,87 @@ End Sub
 ' =============================================================
 
 ' InsertAndFillColumn
-' Inserts a new column at ent.InsertCol (handling idempotency),
-' writes "as per TB" header in ROW_ENTITY_NAME, then fills each
-' account-bearing row with the sum from the TB25 sheet.
+' For each entity:
+'   1. Inserts "as per TB" column then "Difference" column (idempotent).
+'   2. Detects account clusters (consecutive account rows separated by blank rows).
+'   3. In the first row of each cluster: writes the SUM of all accounts in that
+'      cluster from the TB25 sheet, and the difference vs the entity's own value.
+'   4. Hides the detail rows (rows 2..n) of every cluster.
 Private Sub InsertAndFillColumn(wsBS As Worksheet, ent As EntityInfo, wsTB As Worksheet)
 
-    Dim insertAt    As Long
-    Dim lastDataRow As Long
-    Dim r           As Long
-    Dim acctVal     As String
+    Dim insertAt     As Long
+    Dim diffAt       As Long
+    Dim entityCol    As Long
+    Dim lastDataRow  As Long
+    Dim r            As Long
+    Dim r2           As Long
+    Dim acctVal      As String
+    Dim nextAcct     As String
+    Dim clusterTotal As Double
+    Dim entityVal    As Double
 
-    insertAt = ent.InsertCol
+    insertAt  = ent.InsertCol
+    entityCol = ent.LastCol   ' entity value column — stays fixed (insertions are to its right)
 
-    ' Idempotency: if the cell at (ROW_ENTITY_NAME, insertAt) already says
-    ' "as per TB" this column was written in a prior run — delete it first.
-    If Trim(CStr(wsBS.Cells(ROW_ENTITY_NAME, insertAt).Value)) = "as per TB" Then
+    ' ---- Idempotency: remove previously written "as per TB" and "Difference" columns ----
+    ' Loop because after deleting "as per TB", "Difference" shifts into the same slot.
+    Do While Trim(CStr(wsBS.Cells(ROW_ENTITY_NAME, insertAt).Value)) = "as per TB" _
+          Or Trim(CStr(wsBS.Cells(ROW_ENTITY_NAME, insertAt).Value)) = "Difference"
         Application.DisplayAlerts = False
         wsBS.Columns(insertAt).Delete Shift:=xlToLeft
         Application.DisplayAlerts = True
+    Loop
+
+    lastDataRow = LastUsedRow(wsBS, COL_ACCOUNT)
+
+    ' ---- Unhide all data rows (reset hidden state from any previous run) ----
+    If lastDataRow >= ROW_DATA_START Then
+        wsBS.Rows(ROW_DATA_START & ":" & lastDataRow).Hidden = False
     End If
 
-    ' Insert a blank column, pushing existing content to the right.
+    ' ---- Insert "as per TB" column then "Difference" column ----
     wsBS.Columns(insertAt).Insert Shift:=xlToRight
-
-    ' Write header.
     wsBS.Cells(ROW_ENTITY_NAME, insertAt).Value = "as per TB"
 
-    ' Fill data rows.
-    lastDataRow = LastUsedRow(wsBS, COL_ACCOUNT)
-    For r = ROW_DATA_START To lastDataRow
+    diffAt = insertAt + 1
+    wsBS.Columns(diffAt).Insert Shift:=xlToRight
+    wsBS.Cells(ROW_ENTITY_NAME, diffAt).Value = "Difference"
+
+    ' ---- Walk data rows: detect clusters, fill totals, hide detail rows ----
+    r = ROW_DATA_START
+    Do While r <= lastDataRow
+
         acctVal = Trim(CStr(wsBS.Cells(r, COL_ACCOUNT).Value))
+
         If IsAccountRow(acctVal) Then
-            wsBS.Cells(r, insertAt).Value = SumAccountInTB(wsTB, acctVal)
+            ' First account of a new cluster — accumulate TB sum for all rows in cluster.
+            clusterTotal = SumAccountInTB(wsTB, acctVal)
+            r2 = r + 1
+            Do While r2 <= lastDataRow
+                nextAcct = Trim(CStr(wsBS.Cells(r2, COL_ACCOUNT).Value))
+                If Not IsAccountRow(nextAcct) Then Exit Do   ' blank row = cluster boundary
+                clusterTotal = clusterTotal + SumAccountInTB(wsTB, nextAcct)
+                r2 = r2 + 1
+            Loop
+
+            ' Write cluster TB total in the first row.
+            wsBS.Cells(r, insertAt).Value = clusterTotal
+
+            ' Difference = entity's reported value minus TB total.
+            entityVal = ParseGermanNumber(wsBS.Cells(r, entityCol).Value)
+            wsBS.Cells(r, diffAt).Value = entityVal - clusterTotal
+
+            ' Hide the detail rows (every row in the cluster except the first).
+            If r2 - 1 > r Then
+                wsBS.Rows(r + 1 & ":" & (r2 - 1)).Hidden = True
+            End If
+
+            r = r2   ' jump past this cluster to the next non-account row
+        Else
+            r = r + 1
         End If
-    Next r
+
+    Loop
 
 End Sub
 
