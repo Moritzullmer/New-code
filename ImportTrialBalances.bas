@@ -22,13 +22,27 @@ Sub ImportTB()
     Dim lastRow     As Long
     Dim i           As Long
     Dim nextRow     As Long
-    Dim filesOK     As Long
-    Dim j           As Integer
+    Dim filesOK         As Long
+    Dim j               As Integer
+    Dim lastInsertedWs  As Worksheet   ' tracks insert position after "Supportings >>"
 
     Set wb = ThisWorkbook
 
     ' Create (or retrieve) the Combined sheet BEFORE touching anything else
     Set combinedWs = GetOrCreateCombinedSheet(wb)
+
+    ' Resolve insertion anchor – new TB sheets go after "Supportings >>"
+    Const ANCHOR_SHEET As String = "Supportings >>"
+    Dim anchorWs As Worksheet
+    On Error Resume Next
+    Set anchorWs = wb.Sheets(ANCHOR_SHEET)
+    On Error GoTo 0
+    If anchorWs Is Nothing Then
+        MsgBox "Sheet '" & ANCHOR_SHEET & "' not found." & vbNewLine & _
+               "TB sheets will be inserted at the end of the workbook.", vbExclamation
+        Set anchorWs = wb.Sheets(wb.Sheets.Count)
+    End If
+    Set lastInsertedWs = anchorWs   ' first TB goes right after the anchor
 
     ' ---------- File picker ----------
     Set fd = Application.FileDialog(msoFileDialogOpen)
@@ -89,9 +103,10 @@ Sub ImportTB()
         Set srcWs = srcWb.Sheets(sheetIndex)
 
         ' Copy entire sheet to this workbook (preserves all formatting)
-        srcWs.Copy After:=wb.Sheets(wb.Sheets.Count)
-        Set newWs      = wb.Sheets(wb.Sheets.Count)
-        newWs.Name     = GetUniqueSheetName(wb, tbName)
+        srcWs.Copy After:=lastInsertedWs
+        Set newWs          = wb.Sheets(lastInsertedWs.Index + 1)
+        newWs.Name         = GetUniqueSheetName(wb, tbName)
+        Set lastInsertedWs = newWs   ' next TB inserts after this one
 
         srcWb.Close SaveChanges:=False
         Application.ScreenUpdating = True
