@@ -135,6 +135,8 @@ Sub ImportTB()
 
         Application.ScreenUpdating = False
         nextRow = GetNextDataRow(combinedWs)
+        Dim firstNewRow As Long
+        firstNewRow = nextRow
 
         For i = dataStartRow To lastRow
             ' Skip blank Account rows
@@ -153,9 +155,9 @@ NextRow:
         Next i
 
         ' Light number formatting for closing balance column
-        If nextRow > GetNextDataRow(combinedWs) Then
+        If nextRow > firstNewRow Then
             combinedWs.Range( _
-                combinedWs.Cells(GetNextDataRow(combinedWs), 7), _
+                combinedWs.Cells(firstNewRow, 7), _
                 combinedWs.Cells(nextRow - 1, 7)) _
                 .NumberFormat = "#,##0.00;[Red]-#,##0.00"
         End If
@@ -169,11 +171,11 @@ SkipFile:
     ' Final tidy-up
     Application.ScreenUpdating = False
     combinedWs.Columns("A:G").AutoFit
-    combinedWs.Range("A1").Select
     Application.ScreenUpdating = True
     Application.DisplayAlerts  = True
 
     combinedWs.Activate
+    combinedWs.Range("A1").Select
     MsgBox filesOK & " of " & fd.SelectedItems.Count & _
            " Trial Balance(s) imported successfully!", vbInformation, "Import Complete"
     Exit Sub
@@ -234,6 +236,7 @@ Function GetOrCreateCombinedSheet(wb As Workbook) As Worksheet
     ws.Range("A1:G1").AutoFilter
 
     ' Freeze header row
+    ws.Activate
     ws.Rows(2).Select
     ActiveWindow.FreezePanes = True
     ws.Range("A1").Select
