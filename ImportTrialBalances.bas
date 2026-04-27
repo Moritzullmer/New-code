@@ -175,7 +175,6 @@ SkipFile:
     Application.DisplayAlerts  = True
 
     combinedWs.Activate
-    combinedWs.Range("A1").Select
     MsgBox filesOK & " of " & fd.SelectedItems.Count & _
            " Trial Balance(s) imported successfully!", vbInformation, "Import Complete"
     Exit Sub
@@ -235,13 +234,12 @@ Function GetOrCreateCombinedSheet(wb As Workbook) As Worksheet
     ' Add AutoFilter
     ws.Range("A1:G1").AutoFilter
 
-    ' Freeze header row
+    ' Freeze header row — ScreenUpdating must be True for Select to work
+    Application.ScreenUpdating = True
     ws.Activate
     ws.Rows(2).Select
     ActiveWindow.FreezePanes = True
     ws.Range("A1").Select
-
-    Application.ScreenUpdating = True
     Set GetOrCreateCombinedSheet = ws
 End Function
 
