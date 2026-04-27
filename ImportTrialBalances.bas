@@ -120,10 +120,7 @@ Sub ImportTB()
         '   n/a literal          -> col A  Project
         '   TB file name         -> col B  Entity
         '   source col B         -> col C  Account
-        '   col D left blank     ->        (user writes here)
-        '   source col D         -> col E  Transaction type
-        '   (col F intentionally left blank for user use)
-        '   source col F         -> col G  Closing Balance
+        '   source col F         -> col D  Closing Balance
         ' ======================================================
         lastRow = newWs.Cells(newWs.Rows.Count, "B").End(xlUp).Row
 
@@ -143,22 +140,19 @@ Sub ImportTB()
             If Trim(CStr(newWs.Cells(i, 2).Value)) = "" Then GoTo NextRow
 
             combinedWs.Cells(nextRow, 1).Value = "n/a"                     ' Project
-            combinedWs.Cells(nextRow, 2).Value = tbName                    ' Entity        (chosen file name)
-            combinedWs.Cells(nextRow, 3).Value = newWs.Cells(i, 2).Value  ' Account       (src col B)
-            ' col D: left blank – user writes here
-            combinedWs.Cells(nextRow, 5).Value = newWs.Cells(i, 4).Value  ' Txn type      (src col D)
-            ' col F: intentionally left blank
-            combinedWs.Cells(nextRow, 7).Value = newWs.Cells(i, 6).Value  ' Closing bal   (src col F)
+            combinedWs.Cells(nextRow, 2).Value = tbName                    ' Entity  (chosen file name)
+            combinedWs.Cells(nextRow, 3).Value = newWs.Cells(i, 2).Value  ' Account (src col B)
+            combinedWs.Cells(nextRow, 4).Value = newWs.Cells(i, 6).Value  ' Closing balance (src col F)
 
             nextRow = nextRow + 1
 NextRow:
         Next i
 
-        ' Light number formatting for closing balance column
+        ' Number formatting for closing balance column
         If nextRow > firstNewRow Then
             combinedWs.Range( _
-                combinedWs.Cells(firstNewRow, 7), _
-                combinedWs.Cells(nextRow - 1, 7)) _
+                combinedWs.Cells(firstNewRow, 4), _
+                combinedWs.Cells(nextRow - 1, 4)) _
                 .NumberFormat = "#,##0.00;[Red]-#,##0.00"
         End If
 
@@ -170,7 +164,7 @@ SkipFile:
 
     ' Final tidy-up
     Application.ScreenUpdating = False
-    combinedWs.Columns("A:G").AutoFit
+    combinedWs.Columns("A:D").AutoFit
     Application.ScreenUpdating = True
     Application.DisplayAlerts  = True
 
@@ -210,15 +204,14 @@ Function GetOrCreateCombinedSheet(wb As Workbook) As Worksheet
 
     ' --- Write headers in row 1 ---
     Dim headers As Variant
-    headers = Array("Project", "Entity", "Account", "", _
-                    "Transaction type", "", "Closing Balance")
+    headers = Array("Project", "Entity", "Account", "Closing Balance")
     Dim col As Integer
-    For col = 1 To 7
+    For col = 1 To 4
         ws.Cells(1, col).Value = headers(col - 1)
     Next col
 
     ' --- Style header row (dark navy, white bold text) ---
-    With ws.Range("A1:G1")
+    With ws.Range("A1:D1")
         .Font.Bold              = True
         .Font.Color             = RGB(255, 255, 255)
         .Font.Name              = "Calibri"
@@ -232,7 +225,7 @@ Function GetOrCreateCombinedSheet(wb As Workbook) As Worksheet
     End With
 
     ' Add AutoFilter
-    ws.Range("A1:G1").AutoFilter
+    ws.Range("A1:D1").AutoFilter
 
     ' Freeze header row — ScreenUpdating must be True for Select to work
     Application.ScreenUpdating = True
