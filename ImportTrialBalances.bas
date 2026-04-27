@@ -17,7 +17,6 @@ Sub ImportTB()
     Dim fd          As FileDialog
     Dim filePath    As String
     Dim tbName      As String
-    Dim headerRow   As Long
     Dim dataStartRow As Long
     Dim lastRow     As Long
     Dim i           As Long
@@ -112,39 +111,10 @@ Sub ImportTB()
         Application.ScreenUpdating = True
         Application.DisplayAlerts  = True
 
-        ' ======================================================
-        ' STEP 2 – Ask user where the header row is
-        '          and where data starts
-        ' ======================================================
-        Dim hStr As String
-        hStr = InputBox( _
-            "File: " & tbName & vbNewLine & vbNewLine & _
-            "Enter the ROW NUMBER that contains the column headers.", _
-            "Header Row", "1")
-
-        If hStr = "" Then GoTo SkipFile
-        If Not IsNumeric(hStr) Then
-            MsgBox "Invalid entry – skipping '" & tbName & "'.", vbExclamation
-            GoTo SkipFile
-        End If
-        headerRow = CLng(hStr)
-
-        Dim dStr As String
-        dStr = InputBox( _
-            "File: " & tbName & vbNewLine & vbNewLine & _
-            "Header is on row " & headerRow & "." & vbNewLine & _
-            "Enter the ROW NUMBER where the actual data starts (first data row below the header).", _
-            "Data Start Row", CStr(headerRow + 1))
-
-        If dStr = "" Then GoTo SkipFile
-        If Not IsNumeric(dStr) Then
-            MsgBox "Invalid entry – skipping '" & tbName & "'.", vbExclamation
-            GoTo SkipFile
-        End If
-        dataStartRow = CLng(dStr)
+        dataStartRow = 7
 
         ' ======================================================
-        ' STEP 3 – Copy rows to Combined sheet
+        ' STEP 2 – Copy rows to Combined sheet
         '
         ' Mapping (source -> combined):
         '   n/a literal          -> col A  Project
