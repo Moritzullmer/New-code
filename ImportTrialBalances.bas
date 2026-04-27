@@ -104,8 +104,7 @@ Sub ImportTB()
         Dim hStr As String
         hStr = InputBox( _
             "File: " & tbName & vbNewLine & vbNewLine & _
-            "The sheet has been added as tab '" & newWs.Name & "'." & vbNewLine & _
-            "Look at that sheet and enter the ROW NUMBER that contains the column headers.", _
+            "Enter the ROW NUMBER that contains the column headers.", _
             "Header Row", "1")
 
         If hStr = "" Then GoTo SkipFile
@@ -136,7 +135,7 @@ Sub ImportTB()
         '   n/a literal          -> col A  Project
         '   TB file name         -> col B  Entity
         '   source col B         -> col C  Account
-        '   source col C         -> col D  GL account
+        '   col D left blank     ->        (user writes here)
         '   source col D         -> col E  Transaction type
         '   (col F intentionally left blank for user use)
         '   source col F         -> col G  Closing Balance
@@ -157,11 +156,11 @@ Sub ImportTB()
             If Trim(CStr(newWs.Cells(i, 2).Value)) = "" Then GoTo NextRow
 
             combinedWs.Cells(nextRow, 1).Value = "n/a"                     ' Project
-            combinedWs.Cells(nextRow, 2).Value = tbName                    ' Entity
+            combinedWs.Cells(nextRow, 2).Value = tbName                    ' Entity        (chosen file name)
             combinedWs.Cells(nextRow, 3).Value = newWs.Cells(i, 2).Value  ' Account       (src col B)
-            combinedWs.Cells(nextRow, 4).Value = newWs.Cells(i, 3).Value  ' GL account    (src col C)
+            ' col D: left blank – user writes here
             combinedWs.Cells(nextRow, 5).Value = newWs.Cells(i, 4).Value  ' Txn type      (src col D)
-            ' Column F: intentionally left blank – add your own formula/data here
+            ' col F: intentionally left blank
             combinedWs.Cells(nextRow, 7).Value = newWs.Cells(i, 6).Value  ' Closing bal   (src col F)
 
             nextRow = nextRow + 1
@@ -225,7 +224,7 @@ Function GetOrCreateCombinedSheet(wb As Workbook) As Worksheet
 
     ' --- Write headers in row 1 ---
     Dim headers As Variant
-    headers = Array("Project", "Entity", "Account", "GL account", _
+    headers = Array("Project", "Entity", "Account", "", _
                     "Transaction type", "", "Closing Balance")
     Dim col As Integer
     For col = 1 To 7
