@@ -100,6 +100,14 @@ Sub ImportTB()
 
     filesOK = 0
 
+    ' Clear existing data from combined sheet and start from row 2
+    Application.ScreenUpdating = False
+    Dim clearLast As Long
+    clearLast = combinedWs.Cells(combinedWs.Rows.Count, 1).End(xlUp).Row
+    If clearLast > 1 Then combinedWs.Rows("2:" & clearLast).Delete Shift:=xlUp
+    Application.ScreenUpdating = True
+    nextRow = 2
+
     For j = 1 To fd.SelectedItems.Count
         filePath = fd.SelectedItems(j)
         tbName   = GetFileNameWithoutExt(filePath)
@@ -185,7 +193,6 @@ Sub ImportTB()
         End If
 
         Application.ScreenUpdating = False
-        nextRow    = GetNextDataRow(combinedWs)
         firstNewRow = nextRow
 
         For i = dataStartRow To lastRow
@@ -382,41 +389,3 @@ Function GetUniqueSheetName(wb As Workbook, baseName As String) As String
     GetUniqueSheetName = candidate
 End Function
 
-
-' -------------------------------------------------------
-' Returns the first empty row below existing data
-' -------------------------------------------------------
-Function GetNextDataRow(ws As Worksheet) As Long
-    Dim lastRow As Long
-    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
-    If ws.Cells(1, 1).Value = "" Then
-        GetNextDataRow = 1
-    Else
-        GetNextDataRow = lastRow + 1
-    End If
-End Function
-
-
-' -------------------------------------------------------
-' Optional utility: clear all data rows in Combined sheet
-' (keeps the header row and all TB sheets intact)
-' -------------------------------------------------------
-Sub ClearCombinedData()
-    Const SHEET_NAME As String = "Combined TBs & Analysis"
-    Dim ws      As Worksheet
-    Dim lastRow As Long
-
-    For Each ws In ThisWorkbook.Sheets
-        If ws.Name = SHEET_NAME Then
-            lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
-            If lastRow > 1 Then
-                ws.Rows("2:" & lastRow).Delete Shift:=xlUp
-                MsgBox "Combined data cleared (header kept).", vbInformation
-            Else
-                MsgBox "Nothing to clear – Combined sheet already empty.", vbInformation
-            End If
-            Exit Sub
-        End If
-    Next ws
-    MsgBox "Sheet '" & SHEET_NAME & "' not found.", vbExclamation
-End Sub
