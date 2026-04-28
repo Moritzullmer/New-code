@@ -2,37 +2,47 @@ Option Explicit
 
 ' =============================================================
 ' Trial Balance Importer
-' Usage: Run ImportTB() from the Macro menu
+' Usage: click the "Import TB" button on the Combined sheet,
+'        or run ImportTB() from the Macro menu (Alt+F8)
 ' =============================================================
 
 ' -------------------------------------------------------
 ' MAIN ENTRY POINT
 ' -------------------------------------------------------
 Sub ImportTB()
-    Dim wb          As Workbook
-    Dim srcWb       As Workbook
-    Dim srcWs       As Worksheet
-    Dim combinedWs  As Worksheet
-    Dim newWs       As Worksheet
-    Dim fd          As FileDialog
-    Dim filePath    As String
-    Dim tbName      As String
-    Dim dataStartRow As Long
-    Dim lastRow     As Long
-    Dim i           As Long
-    Dim nextRow     As Long
-    Dim filesOK         As Long
-    Dim j               As Integer
-    Dim lastInsertedWs  As Worksheet   ' tracks insert position after "Supportings >>"
+    Dim wb             As Workbook
+    Dim srcWb          As Workbook
+    Dim srcWs          As Worksheet
+    Dim combinedWs     As Worksheet
+    Dim newWs          As Worksheet
+    Dim anchorWs       As Worksheet
+    Dim lastInsertedWs As Worksheet
+    Dim fd             As FileDialog
+    Dim filePath       As String
+    Dim tbName         As String
+    Dim dataStartRow   As Long
+    Dim sharedDataStart As Long
+    Dim lastRow        As Long
+    Dim firstNewRow    As Long
+    Dim nextRow        As Long
+    Dim filesOK        As Long
+    Dim i              As Long
+    Dim j              As Integer
+    Dim s              As Integer
+    Dim sheetIndex     As Integer
+    Dim sameFormat     As Boolean
+    Dim hInput         As String
+    Dim dInput         As String
+    Dim sheetList      As String
+    Dim sheetChoice    As String
 
     Set wb = ThisWorkbook
 
-    ' Create (or retrieve) the Combined sheet BEFORE touching anything else
+    ' Create (or retrieve) the Combined sheet
     Set combinedWs = GetOrCreateCombinedSheet(wb)
 
     ' Resolve insertion anchor – new TB sheets go after "Supportings >>"
     Const ANCHOR_SHEET As String = "Supportings >>"
-    Dim anchorWs As Worksheet
     On Error Resume Next
     Set anchorWs = wb.Sheets(ANCHOR_SHEET)
     On Error GoTo 0
@@ -41,7 +51,7 @@ Sub ImportTB()
                "TB sheets will be inserted at the end of the workbook.", vbExclamation
         Set anchorWs = wb.Sheets(wb.Sheets.Count)
     End If
-    Set lastInsertedWs = anchorWs   ' first TB goes right after the anchor
+    Set lastInsertedWs = anchorWs
 
     ' ---------- File picker ----------
     Set fd = Application.FileDialog(msoFileDialogOpen)
@@ -57,6 +67,37 @@ Sub ImportTB()
         Exit Sub
     End If
 
+    ' ---------- Same or different format? ----------
+    If fd.SelectedItems.Count > 1 Then
+        sameFormat = (MsgBox( _
+            "You selected " & fd.SelectedItems.Count & " files." & vbNewLine & vbNewLine & _
+            "Do all files have the SAME format?" & vbNewLine & _
+            "(same header row and data start row)" & vbNewLine & vbNewLine & _
+            "Yes = ask once for all files" & vbNewLine & _
+            "No  = ask separately for each file", _
+            vbYesNo + vbQuestion, "File Format") = vbYes)
+    Else
+        sameFormat = True
+    End If
+
+    ' If same format, ask once up front
+    If sameFormat Then
+        hInput = InputBox("Enter the ROW NUMBER that contains the column headers.", _
+                          "Header Row (all files)", "1")
+        If hInput = "" Or Not IsNumeric(hInput) Then
+            MsgBox "Import cancelled.", vbInformation
+            Exit Sub
+        End If
+        dInput = InputBox("Header is on row " & hInput & "." & vbNewLine & _
+                          "Enter the ROW NUMBER where data starts.", _
+                          "Data Start Row (all files)", CStr(CLng(hInput) + 1))
+        If dInput = "" Or Not IsNumeric(dInput) Then
+            MsgBox "Import cancelled.", vbInformation
+            Exit Sub
+        End If
+        sharedDataStart = CLng(dInput)
+    End If
+
     filesOK = 0
 
     For j = 1 To fd.SelectedItems.Count
@@ -64,8 +105,7 @@ Sub ImportTB()
         tbName   = GetFileNameWithoutExt(filePath)
 
         ' ======================================================
-        ' STEP 1 – Open source workbook and copy its first sheet
-        '          as a new tab in this workbook
+        ' STEP 1 – Open source workbook and copy its sheet
         ' ======================================================
         Application.ScreenUpdating = False
         Application.DisplayAlerts  = False
@@ -75,17 +115,13 @@ Sub ImportTB()
         On Error GoTo 0
 
         ' If source has multiple sheets, ask which one to use
-        Dim sheetIndex As Integer
         sheetIndex = 1
         If srcWb.Sheets.Count > 1 Then
             Application.ScreenUpdating = True
-            Dim sheetList As String
-            Dim s As Integer
             sheetList = ""
             For s = 1 To srcWb.Sheets.Count
                 sheetList = sheetList & s & " - " & srcWb.Sheets(s).Name & vbNewLine
             Next s
-            Dim sheetChoice As String
             sheetChoice = InputBox( _
                 "File: " & tbName & " has " & srcWb.Sheets.Count & " sheets:" & _
                 vbNewLine & sheetList & vbNewLine & _
@@ -105,22 +141,40 @@ Sub ImportTB()
         srcWs.Copy After:=lastInsertedWs
         Set newWs          = wb.Sheets(lastInsertedWs.Index + 1)
         newWs.Name         = GetUniqueSheetName(wb, tbName)
-        Set lastInsertedWs = newWs   ' next TB inserts after this one
+        Set lastInsertedWs = newWs
 
         srcWb.Close SaveChanges:=False
         Application.ScreenUpdating = True
         Application.DisplayAlerts  = True
 
-        dataStartRow = 7
+        ' ======================================================
+        ' STEP 2 – Determine data start row
+        ' ======================================================
+        If sameFormat Then
+            dataStartRow = sharedDataStart
+        Else
+            hInput = InputBox("File: " & tbName & vbNewLine & vbNewLine & _
+                              "Enter the ROW NUMBER that contains the column headers.", _
+                              "Header Row", "1")
+            If hInput = "" Or Not IsNumeric(hInput) Then GoTo SkipFile
+
+            dInput = InputBox("File: " & tbName & vbNewLine & _
+                              "Header is on row " & hInput & "." & vbNewLine & _
+                              "Enter the ROW NUMBER where data starts.", _
+                              "Data Start Row", CStr(CLng(hInput) + 1))
+            If dInput = "" Or Not IsNumeric(dInput) Then GoTo SkipFile
+
+            dataStartRow = CLng(dInput)
+        End If
 
         ' ======================================================
-        ' STEP 2 – Copy rows to Combined sheet
+        ' STEP 3 – Copy rows to Combined sheet
         '
         ' Mapping (source -> combined):
-        '   n/a literal          -> col A  Project
-        '   TB file name         -> col B  Entity
-        '   source col B         -> col C  Account
-        '   source col F         -> col D  Closing Balance
+        '   n/a literal  -> col A  Project
+        '   TB file name -> col B  Entity
+        '   source col B -> col C  Account
+        '   source col F -> col D  Closing Balance
         ' ======================================================
         lastRow = newWs.Cells(newWs.Rows.Count, "B").End(xlUp).Row
 
@@ -131,24 +185,22 @@ Sub ImportTB()
         End If
 
         Application.ScreenUpdating = False
-        nextRow = GetNextDataRow(combinedWs)
-        Dim firstNewRow As Long
+        nextRow    = GetNextDataRow(combinedWs)
         firstNewRow = nextRow
 
         For i = dataStartRow To lastRow
-            ' Skip blank Account rows
             If Trim(CStr(newWs.Cells(i, 2).Value)) = "" Then GoTo NextRow
 
-            combinedWs.Cells(nextRow, 1).Value = "n/a"                     ' Project
-            combinedWs.Cells(nextRow, 2).Value = tbName                    ' Entity  (chosen file name)
-            combinedWs.Cells(nextRow, 3).Value = newWs.Cells(i, 2).Value  ' Account (src col B)
-            combinedWs.Cells(nextRow, 4).Value = newWs.Cells(i, 6).Value  ' Closing balance (src col F)
+            combinedWs.Cells(nextRow, 1).Value = "n/a"
+            combinedWs.Cells(nextRow, 2).Value = tbName
+            combinedWs.Cells(nextRow, 3).Value = newWs.Cells(i, 2).Value  ' src col B
+            combinedWs.Cells(nextRow, 4).Value = newWs.Cells(i, 6).Value  ' src col F
 
             nextRow = nextRow + 1
 NextRow:
         Next i
 
-        ' Number formatting for closing balance column
+        ' Number formatting for closing balance
         If nextRow > firstNewRow Then
             combinedWs.Range( _
                 combinedWs.Cells(firstNewRow, 4), _
@@ -184,7 +236,8 @@ End Sub
 
 
 ' -------------------------------------------------------
-' Creates "Combined TBs & Analysis" if not already present
+' Creates "Combined TBs & Analysis" if not already present,
+' including the Import TB button
 ' -------------------------------------------------------
 Function GetOrCreateCombinedSheet(wb As Workbook) As Worksheet
     Const SHEET_NAME As String = "Combined TBs & Analysis"
@@ -202,7 +255,7 @@ Function GetOrCreateCombinedSheet(wb As Workbook) As Worksheet
     Set ws = wb.Sheets.Add(Before:=wb.Sheets(1))
     ws.Name = SHEET_NAME
 
-    ' --- Write headers in row 1 ---
+    ' --- Write headers ---
     Dim headers As Variant
     headers = Array("Project", "Entity", "Account", "Closing Balance")
     Dim col As Integer
@@ -212,11 +265,11 @@ Function GetOrCreateCombinedSheet(wb As Workbook) As Worksheet
 
     ' --- Style header row (dark navy, white bold text) ---
     With ws.Range("A1:D1")
-        .Font.Bold              = True
-        .Font.Color             = RGB(255, 255, 255)
-        .Font.Name              = "Calibri"
-        .Interior.Color         = RGB(0, 32, 96)
-        .HorizontalAlignment    = xlLeft
+        .Font.Bold           = True
+        .Font.Color          = RGB(255, 255, 255)
+        .Font.Name           = "Calibri"
+        .Interior.Color      = RGB(0, 32, 96)
+        .HorizontalAlignment = xlLeft
         With .Borders(xlEdgeBottom)
             .LineStyle = xlContinuous
             .Weight    = xlMedium
@@ -224,17 +277,67 @@ Function GetOrCreateCombinedSheet(wb As Workbook) As Worksheet
         End With
     End With
 
-    ' Add AutoFilter
+    ' --- AutoFilter ---
     ws.Range("A1:D1").AutoFilter
 
-    ' Freeze header row — ScreenUpdating must be True for Select to work
+    ' --- Freeze header row (ScreenUpdating must be True for Select) ---
     Application.ScreenUpdating = True
     ws.Activate
     ws.Rows(2).Select
     ActiveWindow.FreezePanes = True
     ws.Range("A1").Select
+
+    ' --- Import TB button (placed in column F row 1) ---
+    AddImportButton ws
+
     Set GetOrCreateCombinedSheet = ws
 End Function
+
+
+' -------------------------------------------------------
+' Adds (or replaces) the Import TB button on a given sheet
+' Run this manually if the button ever needs to be recreated
+' -------------------------------------------------------
+Sub AddImportButton(Optional ws As Worksheet = Nothing)
+    If ws Is Nothing Then
+        Const SHEET_NAME As String = "Combined TBs & Analysis"
+        Dim wsFind As Worksheet
+        For Each wsFind In ThisWorkbook.Sheets
+            If wsFind.Name = SHEET_NAME Then
+                Set ws = wsFind
+                Exit For
+            End If
+        Next wsFind
+        If ws Is Nothing Then
+            MsgBox "Sheet '" & SHEET_NAME & "' not found.", vbExclamation
+            Exit Sub
+        End If
+    End If
+
+    ' Remove existing button if present
+    Dim btn As Object
+    For Each btn In ws.Buttons
+        If btn.Name = "btnImportTB" Then
+            btn.Delete
+            Exit For
+        End If
+    Next btn
+
+    ' Add button positioned in column F, row 1
+    Dim newBtn As Object
+    Set newBtn = ws.Buttons.Add( _
+        ws.Cells(1, 6).Left + 4, _
+        ws.Cells(1, 6).Top + 2, _
+        110, ws.Rows(1).Height - 4)
+    With newBtn
+        .Caption  = "Import TB"
+        .OnAction = "ImportTB"
+        .Name     = "btnImportTB"
+        .Font.Bold = True
+        .Font.Name = "Calibri"
+        .Font.Size = 10
+    End With
+End Sub
 
 
 ' -------------------------------------------------------
@@ -300,13 +403,13 @@ End Function
 ' -------------------------------------------------------
 Sub ClearCombinedData()
     Const SHEET_NAME As String = "Combined TBs & Analysis"
-    Dim ws As Worksheet
+    Dim ws      As Worksheet
+    Dim lastRow As Long
 
     For Each ws In ThisWorkbook.Sheets
         If ws.Name = SHEET_NAME Then
-            If ws.Cells(ws.Rows.Count, 1).End(xlUp).Row > 1 Then
-                Dim lastRow As Long
-                lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+            lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+            If lastRow > 1 Then
                 ws.Rows("2:" & lastRow).Delete Shift:=xlUp
                 MsgBox "Combined data cleared (header kept).", vbInformation
             Else
