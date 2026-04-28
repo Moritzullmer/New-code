@@ -4,37 +4,43 @@ Option Explicit
 ' Trial Balance Importer
 ' Usage: click the "Import TB" button on the Combined sheet,
 '        or run ImportTB() from the Macro menu (Alt+F8)
+'
+' Combined sheet layout:
+'   Row 1  : Import TB button (dedicated button row)
+'   Row 2  : Headers  (Project | Entity | Account | Closing Balance)
+'   Row 3+ : Data
 ' =============================================================
 
 ' -------------------------------------------------------
 ' MAIN ENTRY POINT
 ' -------------------------------------------------------
 Sub ImportTB()
-    Dim wb             As Workbook
-    Dim srcWb          As Workbook
-    Dim srcWs          As Worksheet
-    Dim combinedWs     As Worksheet
-    Dim newWs          As Worksheet
-    Dim anchorWs       As Worksheet
-    Dim lastInsertedWs As Worksheet
-    Dim fd             As FileDialog
-    Dim filePath       As String
-    Dim tbName         As String
-    Dim dataStartRow   As Long
+    Dim wb              As Workbook
+    Dim srcWb           As Workbook
+    Dim srcWs           As Worksheet
+    Dim combinedWs      As Worksheet
+    Dim newWs           As Worksheet
+    Dim anchorWs        As Worksheet
+    Dim lastInsertedWs  As Worksheet
+    Dim fd              As FileDialog
+    Dim filePath        As String
+    Dim tbName          As String
+    Dim dataStartRow    As Long
     Dim sharedDataStart As Long
-    Dim lastRow        As Long
-    Dim firstNewRow    As Long
-    Dim nextRow        As Long
-    Dim filesOK        As Long
-    Dim i              As Long
-    Dim j              As Integer
-    Dim s              As Integer
-    Dim sheetIndex     As Integer
-    Dim sameFormat     As Boolean
-    Dim hInput         As String
-    Dim dInput         As String
-    Dim sheetList      As String
-    Dim sheetChoice    As String
+    Dim lastRow         As Long
+    Dim firstNewRow     As Long
+    Dim nextRow         As Long
+    Dim clearLast       As Long
+    Dim filesOK         As Long
+    Dim i               As Long
+    Dim j               As Integer
+    Dim s               As Integer
+    Dim sheetIndex      As Integer
+    Dim sameFormat      As Boolean
+    Dim hInput          As String
+    Dim dInput          As String
+    Dim sheetList       As String
+    Dim sheetChoice     As String
 
     Set wb = ThisWorkbook
 
@@ -100,13 +106,12 @@ Sub ImportTB()
 
     filesOK = 0
 
-    ' Clear existing data from combined sheet and start from row 2
+    ' Clear existing data (rows 3+) and start writing from row 3
     Application.ScreenUpdating = False
-    Dim clearLast As Long
     clearLast = combinedWs.Cells(combinedWs.Rows.Count, 1).End(xlUp).Row
-    If clearLast > 1 Then combinedWs.Rows("2:" & clearLast).Delete Shift:=xlUp
+    If clearLast > 2 Then combinedWs.Rows("3:" & clearLast).Delete Shift:=xlUp
     Application.ScreenUpdating = True
-    nextRow = 2
+    nextRow = 3
 
     For j = 1 To fd.SelectedItems.Count
         filePath = fd.SelectedItems(j)
@@ -243,8 +248,7 @@ End Sub
 
 
 ' -------------------------------------------------------
-' Creates "Combined TBs & Analysis" if not already present,
-' including the Import TB button
+' Creates "Combined TBs & Analysis" if not already present
 ' -------------------------------------------------------
 Function GetOrCreateCombinedSheet(wb As Workbook) As Worksheet
     Const SHEET_NAME As String = "Combined TBs & Analysis"
@@ -262,16 +266,19 @@ Function GetOrCreateCombinedSheet(wb As Workbook) As Worksheet
     Set ws = wb.Sheets.Add(Before:=wb.Sheets(1))
     ws.Name = SHEET_NAME
 
-    ' --- Write headers ---
+    ' --- Row 1: dedicated button row ---
+    ws.Rows(1).RowHeight = 35
+
+    ' --- Row 2: column headers ---
     Dim headers As Variant
     headers = Array("Project", "Entity", "Account", "Closing Balance")
     Dim col As Integer
     For col = 1 To 4
-        ws.Cells(1, col).Value = headers(col - 1)
+        ws.Cells(2, col).Value = headers(col - 1)
     Next col
 
     ' --- Style header row (dark navy, white bold text) ---
-    With ws.Range("A1:D1")
+    With ws.Range("A2:D2")
         .Font.Bold           = True
         .Font.Color          = RGB(255, 255, 255)
         .Font.Name           = "Calibri"
@@ -284,17 +291,17 @@ Function GetOrCreateCombinedSheet(wb As Workbook) As Worksheet
         End With
     End With
 
-    ' --- AutoFilter ---
-    ws.Range("A1:D1").AutoFilter
+    ' --- AutoFilter on header row ---
+    ws.Range("A2:D2").AutoFilter
 
-    ' --- Freeze header row (ScreenUpdating must be True for Select) ---
+    ' --- Freeze rows 1-2 so button and headers stay visible ---
     Application.ScreenUpdating = True
     ws.Activate
-    ws.Rows(2).Select
+    ws.Rows(3).Select
     ActiveWindow.FreezePanes = True
     ws.Range("A1").Select
 
-    ' --- Import TB button (placed in column F row 1) ---
+    ' --- Add Import TB button in row 1 ---
     AddImportButton ws
 
     Set GetOrCreateCombinedSheet = ws
@@ -302,12 +309,14 @@ End Function
 
 
 ' -------------------------------------------------------
-' Adds (or replaces) the Import TB button on a given sheet
-' Run this manually if the button ever needs to be recreated
+' Adds (or replaces) the Import TB button in row 1.
+' Run this manually (Alt+F8 > AddImportButton) to
+' recreate the button if it was ever deleted.
 ' -------------------------------------------------------
 Sub AddImportButton(Optional ws As Worksheet = Nothing)
+    Const SHEET_NAME As String = "Combined TBs & Analysis"
+
     If ws Is Nothing Then
-        Const SHEET_NAME As String = "Combined TBs & Analysis"
         Dim wsFind As Worksheet
         For Each wsFind In ThisWorkbook.Sheets
             If wsFind.Name = SHEET_NAME Then
@@ -330,16 +339,18 @@ Sub AddImportButton(Optional ws As Worksheet = Nothing)
         End If
     Next btn
 
-    ' Add button positioned in column F, row 1
+    ' Place button in row 1, starting at column A
+    Dim btnLeft   As Double: btnLeft   = ws.Cells(1, 1).Left + 4
+    Dim btnTop    As Double: btnTop    = ws.Cells(1, 1).Top  + 4
+    Dim btnWidth  As Double: btnWidth  = 120
+    Dim btnHeight As Double: btnHeight = ws.Rows(1).RowHeight - 8
+
     Dim newBtn As Object
-    Set newBtn = ws.Buttons.Add( _
-        ws.Cells(1, 6).Left + 4, _
-        ws.Cells(1, 6).Top + 2, _
-        110, ws.Rows(1).Height - 4)
+    Set newBtn = ws.Buttons.Add(btnLeft, btnTop, btnWidth, btnHeight)
     With newBtn
-        .Caption  = "Import TB"
-        .OnAction = "ImportTB"
-        .Name     = "btnImportTB"
+        .Caption   = "Import TB"
+        .OnAction  = "ImportTB"
+        .Name      = "btnImportTB"
         .Font.Bold = True
         .Font.Name = "Calibri"
         .Font.Size = 10
@@ -388,4 +399,3 @@ Function GetUniqueSheetName(wb As Workbook, baseName As String) As String
 
     GetUniqueSheetName = candidate
 End Function
-
