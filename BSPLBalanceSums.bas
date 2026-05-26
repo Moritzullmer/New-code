@@ -10,7 +10,7 @@ Private Const ROW_DATA_LABEL  As Long = 10   ' row where "DATA" marks the compar
 Private Const ROW_DATA_START  As Long = 13   ' first row that may contain account numbers
 Private Const COL_ACCOUNT     As Long = 2    ' column B holds account numbers in BS / PL
 
-Private Const TB_COL_ACCT     As Long = 1    ' TB sheet: account code in col A
+Private Const TB_COL_ACCT     As Long = 2    ' TB sheet: account code in col B
 Private Const TB_COL_SALDO    As Long = 6    ' TB sheet: ending balance in col F
 Private Const TB_ROW_START    As Long = 2    ' TB sheet: data starts at row 2 (row 1 = header)
 
