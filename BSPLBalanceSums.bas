@@ -134,20 +134,20 @@ End Sub
 ' =============================================================
 Private Sub InsertAndFill(ws As Worksheet, ent As EntityInfo, wsTB As Worksheet)
 
-    Dim insertAt     As Long
-    Dim diffAt       As Long
-    Dim entityCol    As Long
-    Dim lastDataRow  As Long
-    Dim r            As Long
-    Dim r2           As Long
-    Dim acctVal      As String
-    Dim nextAcct     As String
-    Dim clusterTotal As Double
-    Dim entityVal    As Double
-    Dim diffVal      As Double
+    Dim insertAt    As Long
+    Dim diffAt      As Long
+    Dim entityCol   As Long
+    Dim lastDataRow As Long
+    Dim r           As Long
+    Dim acctVal     As String
+    Dim tbSum       As Double
+    Dim entityVal   As Double
+    Dim diffVal     As Double
+    Dim tbSheetName As String
 
-    insertAt  = ent.InsertCol
-    entityCol = ent.DataCol   ' the "DATA" column — stays fixed, insertions are to its right
+    insertAt    = ent.InsertCol
+    entityCol   = ent.DataCol
+    tbSheetName = ent.Code
 
     ' ---- Idempotency: remove previously inserted columns ----
     Do While Trim(CStr(ws.Cells(ROW_ENTITY, insertAt).Value)) = "as per TB" _
@@ -174,55 +174,38 @@ Private Sub InsertAndFill(ws As Worksheet, ent As EntityInfo, wsTB As Worksheet)
     ws.Cells(ROW_ENTITY, diffAt).Value = "Difference"
     ws.Cells(ROW_ENTITY, diffAt).Interior.Color = RGB(198, 239, 206)
 
-    ' ---- Walk data rows: detect clusters, sum, fill, hide ----
+    ' ---- Process every account row individually ----
+    ' Blue rows are skipped; blank rows are skipped but do not limit the range.
+    ' Every account row between blue section headers gets its own SUMIF formula.
     r = ROW_DATA_START
     Do While r <= lastDataRow
 
-        ' Skip blue section-header rows entirely (don't treat them as cluster boundary).
         If IsSkipRow(ws, r) Then
             r = r + 1
         ElseIf IsAccountRow2(ws.Cells(r, COL_ACCOUNT).Value) Then
-            ' --- First account of a new cluster ---
-            ' CleanAccount strips the leading apostrophe Excel stores as text-prefix.
             acctVal = CleanAccount(ws.Cells(r, COL_ACCOUNT).Value)
-            clusterTotal = SumAccountInTB2(wsTB, acctVal)
-            r2 = r + 1
 
-            ' Collect remaining accounts in this cluster.
-            ' A blue section-header row OR any non-account row ends the cluster.
-            ' Previously blue rows were skipped inside the loop, which caused the
-            ' entire sheet to be treated as one giant cluster.
-            Do While r2 <= lastDataRow
-                If IsSkipRow(ws, r2) Then Exit Do
-                If Not IsAccountRow2(ws.Cells(r2, COL_ACCOUNT).Value) Then Exit Do
-                nextAcct = CleanAccount(ws.Cells(r2, COL_ACCOUNT).Value)
-                clusterTotal = clusterTotal + SumAccountInTB2(wsTB, nextAcct)
-                r2 = r2 + 1
-            Loop
-
-            ' Write TB total and difference in the first row of the cluster.
-            ws.Cells(r, insertAt).Value = clusterTotal
+            ' SUMIF formula — same logic as =SUMIF('EntityCode'!B:B,B{r},'EntityCode'!F:F)
+            ws.Cells(r, insertAt).Formula = _
+                "=SUMIF('" & tbSheetName & "'!B:B,B" & r & ",'" & tbSheetName & "'!F:F)"
             ws.Cells(r, insertAt).Interior.Color = RGB(198, 239, 206)
 
+            ' VBA sum for difference and font-colour (consistent with formula result).
+            tbSum     = SumAccountInTB2(wsTB, acctVal)
             entityVal = ParseGermanNumber2(ws.Cells(r, entityCol).Value)
-            diffVal = entityVal - clusterTotal
+            diffVal   = entityVal - tbSum
+
             ws.Cells(r, diffAt).Value = diffVal
             ws.Cells(r, diffAt).Interior.Color = RGB(198, 239, 206)
-            ' Red font when there is a difference, black when zero.
             If Abs(Round(diffVal, 2)) > 0 Then
                 ws.Cells(r, diffAt).Font.Color = RGB(255, 0, 0)
             Else
                 ws.Cells(r, diffAt).Font.Color = RGB(0, 0, 0)
             End If
 
-            ' Hide detail rows (every row in the cluster except the first).
-            If r2 - 1 > r Then
-                ws.Rows(r + 1 & ":" & (r2 - 1)).Hidden = True
-            End If
-
-            r = r2
+            r = r + 1
         Else
-            r = r + 1   ' blank or non-account row → cluster boundary, keep scanning
+            r = r + 1
         End If
 
     Loop
