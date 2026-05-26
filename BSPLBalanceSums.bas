@@ -59,7 +59,7 @@ Public Sub RunBSPLBalanceSums()
     For Each item In sheetNames
         Set ws = Nothing
         On Error Resume Next
-        Set ws = ThisWorkbook.Sheets(CStr(item))
+        Set ws = ActiveWorkbook.Sheets(CStr(item))
         On Error GoTo ErrHandler
         If ws Is Nothing Then
             LogSkip2 "Sheet '" & CStr(item) & "' not found in this workbook — skipped."
@@ -109,7 +109,7 @@ Private Sub ProcessConsoSheet(ws As Worksheet)
         If Not entities(i).Skipped Then
             Set wsTB = Nothing
             On Error Resume Next
-            Set wsTB = ThisWorkbook.Sheets(entities(i).Code)
+            Set wsTB = ActiveWorkbook.Sheets(entities(i).Code)
             On Error GoTo 0
             If wsTB Is Nothing Then
                 LogSkip2 "Sheet '" & ws.Name & "', entity '" & entities(i).Code & _
