@@ -144,6 +144,7 @@ Private Sub InsertAndFill(ws As Worksheet, ent As EntityInfo, wsTB As Worksheet)
     Dim nextAcct     As String
     Dim clusterTotal As Double
     Dim entityVal    As Double
+    Dim diffVal      As Double
 
     insertAt  = ent.InsertCol
     entityCol = ent.DataCol   ' the "DATA" column — stays fixed, insertions are to its right
@@ -166,10 +167,12 @@ Private Sub InsertAndFill(ws As Worksheet, ent As EntityInfo, wsTB As Worksheet)
     ' ---- Insert "as per TB" then "Difference" ----
     ws.Columns(insertAt).Insert Shift:=xlToRight
     ws.Cells(ROW_ENTITY, insertAt).Value = "as per TB"
+    ws.Cells(ROW_ENTITY, insertAt).Interior.Color = RGB(198, 239, 206)
 
     diffAt = insertAt + 1
     ws.Columns(diffAt).Insert Shift:=xlToRight
     ws.Cells(ROW_ENTITY, diffAt).Value = "Difference"
+    ws.Cells(ROW_ENTITY, diffAt).Interior.Color = RGB(198, 239, 206)
 
     ' ---- Walk data rows: detect clusters, sum, fill, hide ----
     r = ROW_DATA_START
@@ -199,8 +202,18 @@ Private Sub InsertAndFill(ws As Worksheet, ent As EntityInfo, wsTB As Worksheet)
 
             ' Write TB total and difference in the first row of the cluster.
             ws.Cells(r, insertAt).Value = clusterTotal
+            ws.Cells(r, insertAt).Interior.Color = RGB(198, 239, 206)
+
             entityVal = ParseGermanNumber2(ws.Cells(r, entityCol).Value)
-            ws.Cells(r, diffAt).Value = entityVal - clusterTotal
+            diffVal = entityVal - clusterTotal
+            ws.Cells(r, diffAt).Value = diffVal
+            ws.Cells(r, diffAt).Interior.Color = RGB(198, 239, 206)
+            ' Red font when there is a difference, black when zero.
+            If Abs(Round(diffVal, 2)) > 0 Then
+                ws.Cells(r, diffAt).Font.Color = RGB(255, 0, 0)
+            Else
+                ws.Cells(r, diffAt).Font.Color = RGB(0, 0, 0)
+            End If
 
             ' Hide detail rows (every row in the cluster except the first).
             If r2 - 1 > r Then
