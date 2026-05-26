@@ -6,6 +6,7 @@ Option Explicit
 ' Edit these to match the workbook layout.
 ' =============================================================
 Private Const ROW_ENTITY      As Long = 9    ' row containing entity codes (e.g. "1234")
+Private Const ROW_DATA_LABEL  As Long = 10   ' row where "DATA" marks the comparison column
 Private Const ROW_DATA_START  As Long = 13   ' first row that may contain account numbers
 Private Const COL_ACCOUNT     As Long = 2    ' column B holds account numbers in BS / PL
 
@@ -13,10 +14,8 @@ Private Const TB_COL_ACCT     As Long = 1    ' TB sheet: account code in col A
 Private Const TB_COL_SALDO    As Long = 6    ' TB sheet: ending balance in col F
 Private Const TB_ROW_START    As Long = 2    ' TB sheet: data starts at row 2 (row 1 = header)
 
-' Interior Color of section-header rows to skip (the "blue" rows).
-' Set this to the exact RGB value once the screenshot is confirmed.
-' While set to -1 the colour-skip feature is disabled.
-Private Const SKIP_ROW_COLOR  As Long = -1
+' Entity code to exclude entirely (sheet will not be processed).
+Private Const EXCLUDED_CODE   As String = "1224"
 
 ' =============================================================
 ' MODULE-LEVEL STATE
@@ -30,6 +29,7 @@ Private Type EntityInfo
     Code        As String   ' 4-digit entity code (also the TB sheet name)
     FirstCol    As Long     ' leftmost column of entity span in ROW_ENTITY
     LastCol     As Long     ' rightmost column of entity span
+    DataCol     As Long     ' column in ROW_DATA_LABEL that contains "DATA" (value to compare)
     InsertCol   As Long     ' column where "as per TB" will be inserted
     Skipped     As Boolean
 End Type
@@ -146,7 +146,7 @@ Private Sub InsertAndFill(ws As Worksheet, ent As EntityInfo, wsTB As Worksheet)
     Dim entityVal    As Double
 
     insertAt  = ent.InsertCol
-    entityCol = ent.LastCol   ' stays fixed — insertions happen to its right
+    entityCol = ent.DataCol   ' the "DATA" column — stays fixed, insertions are to its right
 
     ' ---- Idempotency: remove previously inserted columns ----
     Do While Trim(CStr(ws.Cells(ROW_ENTITY, insertAt).Value)) = "as per TB" _
@@ -223,14 +223,19 @@ End Sub
 ' FindEntityColumns2
 ' Scans ROW_ENTITY from col 3 onwards (cols A/B are account data).
 ' Uses MergeArea.Columns.Count to handle merged entity headers.
+' Skips the excluded code (EXCLUDED_CODE constant).
+' For each entity, finds the column in ROW_DATA_LABEL that contains
+' "DATA" — that column is stored as DataCol and used for comparisons.
 Private Sub FindEntityColumns2(ws As Worksheet, _
                                 ByRef entities() As EntityInfo, _
                                 ByRef entCount As Long)
 
     Dim lastCol  As Long
     Dim c        As Long
+    Dim dc       As Long
     Dim cellVal  As String
     Dim spanCols As Long
+    Dim dataCol  As Long
 
     entCount = 0
     ReDim entities(0)
@@ -243,15 +248,30 @@ Private Sub FindEntityColumns2(ws As Worksheet, _
         If cellVal <> "" Then
             spanCols = ws.Cells(ROW_ENTITY, c).MergeArea.Columns.Count
 
-            ReDim Preserve entities(entCount)
-            entities(entCount).Code      = cellVal
-            entities(entCount).FirstCol  = c
-            entities(entCount).LastCol   = c + spanCols - 1
-            entities(entCount).InsertCol = c + spanCols
-            entities(entCount).Skipped   = False
-            entCount = entCount + 1
+            ' Skip explicitly excluded entity codes.
+            If cellVal = EXCLUDED_CODE Then
+                c = c + spanCols
+            Else
+                ' Find the "DATA" column within this entity's span in ROW_DATA_LABEL.
+                dataCol = c   ' fallback: use first column if "DATA" not found
+                For dc = c To c + spanCols - 1
+                    If Trim(CStr(ws.Cells(ROW_DATA_LABEL, dc).Value)) = "DATA" Then
+                        dataCol = dc
+                        Exit For
+                    End If
+                Next dc
 
-            c = c + spanCols
+                ReDim Preserve entities(entCount)
+                entities(entCount).Code      = cellVal
+                entities(entCount).FirstCol  = c
+                entities(entCount).LastCol   = c + spanCols - 1
+                entities(entCount).DataCol   = dataCol
+                entities(entCount).InsertCol = c + spanCols
+                entities(entCount).Skipped   = False
+                entCount = entCount + 1
+
+                c = c + spanCols
+            End If
         Else
             c = c + 1
         End If
@@ -308,15 +328,15 @@ Private Function IsAccountRow2(cellVal As Variant) As Boolean
 End Function
 
 ' IsSkipRow
-' Returns True for blue section-header rows that should be ignored.
-' Set SKIP_ROW_COLOR to the exact RGB of the blue rows.
-' While SKIP_ROW_COLOR = -1 this always returns False (disabled).
+' Returns True for coloured section-header rows (the blue rows visible
+' in the screenshot).  Any row whose account cell has a non-white,
+' non-transparent background fill is treated as a header to skip.
+' ColorIndex -4142 (xlColorIndexNone) = no fill; 2 = white — both
+' appear white and should NOT be skipped.
 Private Function IsSkipRow(ws As Worksheet, r As Long) As Boolean
-    If SKIP_ROW_COLOR = -1 Then
-        IsSkipRow = False
-        Exit Function
-    End If
-    IsSkipRow = (ws.Cells(r, COL_ACCOUNT).Interior.Color = CLng(SKIP_ROW_COLOR))
+    Dim ci As Long
+    ci = ws.Cells(r, COL_ACCOUNT).Interior.ColorIndex
+    IsSkipRow = (ci <> xlColorIndexNone) And (ci <> 2)
 End Function
 
 ' LastUsedRow2
