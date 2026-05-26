@@ -1,0 +1,378 @@
+Attribute VB_Name = "BSPLBalanceSums"
+Option Explicit
+
+' =============================================================
+' CONSTANTS
+' Edit these to match the workbook layout.
+' =============================================================
+Private Const ROW_ENTITY      As Long = 9    ' row containing entity codes (e.g. "1234")
+Private Const ROW_DATA_START  As Long = 13   ' first row that may contain account numbers
+Private Const COL_ACCOUNT     As Long = 2    ' column B holds account numbers in BS / PL
+
+Private Const TB_COL_ACCT     As Long = 1    ' TB sheet: account code in col A
+Private Const TB_COL_SALDO    As Long = 6    ' TB sheet: ending balance in col F
+Private Const TB_ROW_START    As Long = 2    ' TB sheet: data starts at row 2 (row 1 = header)
+
+' Interior Color of section-header rows to skip (the "blue" rows).
+' Set this to the exact RGB value once the screenshot is confirmed.
+' While set to -1 the colour-skip feature is disabled.
+Private Const SKIP_ROW_COLOR  As Long = -1
+
+' =============================================================
+' MODULE-LEVEL STATE
+' =============================================================
+Private m_SkipLog As String
+
+' =============================================================
+' UDT — one entity column found in ROW_ENTITY
+' =============================================================
+Private Type EntityInfo
+    Code        As String   ' 4-digit entity code (also the TB sheet name)
+    FirstCol    As Long     ' leftmost column of entity span in ROW_ENTITY
+    LastCol     As Long     ' rightmost column of entity span
+    InsertCol   As Long     ' column where "as per TB" will be inserted
+    Skipped     As Boolean
+End Type
+
+' =============================================================
+' PUBLIC ENTRY POINT
+' Runs the balance-sum / difference / row-hide logic on both
+' the "BS" and "PL" sheets in the active workbook.
+' The TB sheets must already be present and named by their
+' 4-digit entity code (exactly as it appears in ROW_ENTITY).
+' =============================================================
+Public Sub RunBSPLBalanceSums()
+
+    Dim sheetNames As Variant
+    Dim item       As Variant
+    Dim ws         As Worksheet
+    Dim processed  As Long
+
+    m_SkipLog = ""
+
+    sheetNames = Array("BS", "PL")
+
+    AppPerfOn2
+
+    On Error GoTo ErrHandler
+
+    For Each item In sheetNames
+        Set ws = Nothing
+        On Error Resume Next
+        Set ws = ThisWorkbook.Sheets(CStr(item))
+        On Error GoTo ErrHandler
+        If ws Is Nothing Then
+            LogSkip2 "Sheet '" & CStr(item) & "' not found in this workbook — skipped."
+        Else
+            ProcessConsoSheet ws
+            processed = processed + 1
+        End If
+    Next item
+
+CleanExit:
+    AppPerfOff2
+    If m_SkipLog <> "" Then
+        MsgBox "Done (" & processed & " sheet(s) processed) with warnings:" & _
+               vbCrLf & vbCrLf & m_SkipLog, vbExclamation, "BS/PL Balance Sums — Warnings"
+    Else
+        MsgBox "Done. " & processed & " sheet(s) processed.", _
+               vbInformation, "BS/PL Balance Sums"
+    End If
+    Exit Sub
+
+ErrHandler:
+    Dim errMsg As String : errMsg = Err.Description
+    AppPerfOff2
+    MsgBox "Unexpected error:" & vbCrLf & errMsg, vbExclamation, "BS/PL Balance Sums — Error"
+
+End Sub
+
+' =============================================================
+' PER-SHEET PROCESSOR
+' =============================================================
+Private Sub ProcessConsoSheet(ws As Worksheet)
+
+    Dim entities() As EntityInfo
+    Dim entCount   As Long
+    Dim i          As Long
+    Dim wsTB       As Worksheet
+
+    FindEntityColumns2 ws, entities, entCount
+
+    If entCount = 0 Then
+        LogSkip2 "Sheet '" & ws.Name & "': no entity codes found in row " & ROW_ENTITY & " — skipped."
+        Exit Sub
+    End If
+
+    ' Process RIGHT TO LEFT to prevent column-index drift on insertion.
+    For i = entCount - 1 To 0 Step -1
+        If Not entities(i).Skipped Then
+            Set wsTB = Nothing
+            On Error Resume Next
+            Set wsTB = ThisWorkbook.Sheets(entities(i).Code)
+            On Error GoTo 0
+            If wsTB Is Nothing Then
+                LogSkip2 "Sheet '" & ws.Name & "', entity '" & entities(i).Code & _
+                         "': TB sheet not found — skipped."
+            Else
+                InsertAndFill ws, entities(i), wsTB
+            End If
+        End If
+    Next i
+
+End Sub
+
+' =============================================================
+' CORE: INSERT COLUMNS AND FILL
+' For each entity:
+'   1. Insert "as per TB" + "Difference" columns (idempotent).
+'   2. Walk account clusters (consecutive account rows separated
+'      by blank rows; blue section-header rows are skipped).
+'   3. First row of each cluster: write cluster TB sum and
+'      difference vs. entity reported value.
+'   4. Hide detail rows (rows 2..n of each cluster).
+' =============================================================
+Private Sub InsertAndFill(ws As Worksheet, ent As EntityInfo, wsTB As Worksheet)
+
+    Dim insertAt     As Long
+    Dim diffAt       As Long
+    Dim entityCol    As Long
+    Dim lastDataRow  As Long
+    Dim r            As Long
+    Dim r2           As Long
+    Dim acctVal      As String
+    Dim nextAcct     As String
+    Dim clusterTotal As Double
+    Dim entityVal    As Double
+
+    insertAt  = ent.InsertCol
+    entityCol = ent.LastCol   ' stays fixed — insertions happen to its right
+
+    ' ---- Idempotency: remove previously inserted columns ----
+    Do While Trim(CStr(ws.Cells(ROW_ENTITY, insertAt).Value)) = "as per TB" _
+          Or Trim(CStr(ws.Cells(ROW_ENTITY, insertAt).Value)) = "Difference"
+        Application.DisplayAlerts = False
+        ws.Columns(insertAt).Delete Shift:=xlToLeft
+        Application.DisplayAlerts = True
+    Loop
+
+    lastDataRow = LastUsedRow2(ws, COL_ACCOUNT)
+
+    ' ---- Unhide all data rows (reset from any previous run) ----
+    If lastDataRow >= ROW_DATA_START Then
+        ws.Rows(ROW_DATA_START & ":" & lastDataRow).Hidden = False
+    End If
+
+    ' ---- Insert "as per TB" then "Difference" ----
+    ws.Columns(insertAt).Insert Shift:=xlToRight
+    ws.Cells(ROW_ENTITY, insertAt).Value = "as per TB"
+
+    diffAt = insertAt + 1
+    ws.Columns(diffAt).Insert Shift:=xlToRight
+    ws.Cells(ROW_ENTITY, diffAt).Value = "Difference"
+
+    ' ---- Walk data rows: detect clusters, sum, fill, hide ----
+    r = ROW_DATA_START
+    Do While r <= lastDataRow
+
+        ' Skip blue section-header rows entirely (don't treat them as cluster boundary).
+        If IsSkipRow(ws, r) Then
+            r = r + 1
+        ElseIf IsAccountRow2(ws.Cells(r, COL_ACCOUNT).Value) Then
+            ' --- First account of a new cluster ---
+            acctVal = Trim(CStr(ws.Cells(r, COL_ACCOUNT).Value))
+            clusterTotal = SumAccountInTB2(wsTB, acctVal)
+            r2 = r + 1
+
+            ' Collect remaining accounts in this cluster.
+            Do While r2 <= lastDataRow
+                If IsSkipRow(ws, r2) Then
+                    ' Blue row inside a cluster — skip over it, it is NOT a cluster boundary.
+                    r2 = r2 + 1
+                Else
+                    nextAcct = Trim(CStr(ws.Cells(r2, COL_ACCOUNT).Value))
+                    If Not IsAccountRow2(ws.Cells(r2, COL_ACCOUNT).Value) Then Exit Do
+                    clusterTotal = clusterTotal + SumAccountInTB2(wsTB, nextAcct)
+                    r2 = r2 + 1
+                End If
+            Loop
+
+            ' Write TB total and difference in the first row of the cluster.
+            ws.Cells(r, insertAt).Value = clusterTotal
+            entityVal = ParseGermanNumber2(ws.Cells(r, entityCol).Value)
+            ws.Cells(r, diffAt).Value = entityVal - clusterTotal
+
+            ' Hide detail rows (every row in the cluster except the first).
+            If r2 - 1 > r Then
+                ws.Rows(r + 1 & ":" & (r2 - 1)).Hidden = True
+            End If
+
+            r = r2
+        Else
+            r = r + 1   ' blank or non-account row → cluster boundary, keep scanning
+        End If
+
+    Loop
+
+End Sub
+
+' =============================================================
+' DISCOVERY
+' =============================================================
+
+' FindEntityColumns2
+' Scans ROW_ENTITY from col 3 onwards (cols A/B are account data).
+' Uses MergeArea.Columns.Count to handle merged entity headers.
+Private Sub FindEntityColumns2(ws As Worksheet, _
+                                ByRef entities() As EntityInfo, _
+                                ByRef entCount As Long)
+
+    Dim lastCol  As Long
+    Dim c        As Long
+    Dim cellVal  As String
+    Dim spanCols As Long
+
+    entCount = 0
+    ReDim entities(0)
+
+    lastCol = ws.Cells(ROW_ENTITY, ws.Columns.Count).End(xlToLeft).Column
+
+    c = 3   ' cols A and B are account data — start scanning from col C
+    Do While c <= lastCol
+        cellVal = Trim(CStr(ws.Cells(ROW_ENTITY, c).Value))
+        If cellVal <> "" Then
+            spanCols = ws.Cells(ROW_ENTITY, c).MergeArea.Columns.Count
+
+            ReDim Preserve entities(entCount)
+            entities(entCount).Code      = cellVal
+            entities(entCount).FirstCol  = c
+            entities(entCount).LastCol   = c + spanCols - 1
+            entities(entCount).InsertCol = c + spanCols
+            entities(entCount).Skipped   = False
+            entCount = entCount + 1
+
+            c = c + spanCols
+        Else
+            c = c + 1
+        End If
+    Loop
+
+End Sub
+
+' =============================================================
+' DATA FUNCTIONS
+' =============================================================
+
+' SumAccountInTB2
+' Sums col F (TB_COL_SALDO) of the TB sheet for all rows where
+' col A (TB_COL_ACCT) exactly matches accountCode.
+Private Function SumAccountInTB2(wsTB As Worksheet, accountCode As String) As Double
+
+    Dim lastR As Long
+    Dim arr   As Variant
+    Dim total As Double
+    Dim r     As Long
+
+    If wsTB Is Nothing Then SumAccountInTB2 = 0 : Exit Function
+
+    lastR = LastUsedRow2(wsTB, TB_COL_ACCT)
+    If lastR < TB_ROW_START Then SumAccountInTB2 = 0 : Exit Function
+
+    arr = wsTB.Range(wsTB.Cells(TB_ROW_START, 1), _
+                     wsTB.Cells(lastR, TB_COL_SALDO)).Value
+
+    total = 0
+    For r = 1 To UBound(arr, 1)
+        If Trim(CStr(arr(r, TB_COL_ACCT))) = accountCode Then
+            total = total + ParseGermanNumber2(arr(r, TB_COL_SALDO))
+        End If
+    Next r
+
+    SumAccountInTB2 = total
+
+End Function
+
+' =============================================================
+' UTILITY FUNCTIONS
+' =============================================================
+
+' IsAccountRow2
+' Returns True if the cell value looks like an account number:
+' starts with a digit (0-9) and contains a hyphen (e.g. "1111-2050").
+' Adjust the pattern here if the account number format differs.
+Private Function IsAccountRow2(cellVal As Variant) As Boolean
+    Dim s As String
+    s = Trim(CStr(cellVal))
+    If Len(s) = 0 Then IsAccountRow2 = False : Exit Function
+    IsAccountRow2 = (s Like "[0-9]*") And (InStr(s, "-") > 0)
+End Function
+
+' IsSkipRow
+' Returns True for blue section-header rows that should be ignored.
+' Set SKIP_ROW_COLOR to the exact RGB of the blue rows.
+' While SKIP_ROW_COLOR = -1 this always returns False (disabled).
+Private Function IsSkipRow(ws As Worksheet, r As Long) As Boolean
+    If SKIP_ROW_COLOR = -1 Then
+        IsSkipRow = False
+        Exit Function
+    End If
+    IsSkipRow = (ws.Cells(r, COL_ACCOUNT).Interior.Color = CLng(SKIP_ROW_COLOR))
+End Function
+
+' LastUsedRow2
+' Returns the last row with data in the given column.
+Private Function LastUsedRow2(ws As Worksheet, col As Long) As Long
+    LastUsedRow2 = ws.Cells(ws.Rows.Count, col).End(xlUp).Row
+End Function
+
+' ParseGermanNumber2
+' Converts German-formatted numeric strings (. = thousands, , = decimal)
+' or already-numeric values to Double.
+Private Function ParseGermanNumber2(rawVal As Variant) As Double
+    Dim s As String
+
+    If IsEmpty(rawVal) Or CStr(rawVal) = "" Then
+        ParseGermanNumber2 = 0 : Exit Function
+    End If
+
+    Select Case VarType(rawVal)
+        Case vbDouble, vbSingle, vbLong, vbInteger, vbByte, vbDecimal, vbCurrency
+            ParseGermanNumber2 = CDbl(rawVal)
+            Exit Function
+    End Select
+
+    s = CStr(rawVal)
+    s = Replace(s, ".", "")
+    s = Replace(s, ",", ".")
+
+    If IsNumeric(s) Then
+        ParseGermanNumber2 = CDbl(s)
+    Else
+        ParseGermanNumber2 = 0
+    End If
+End Function
+
+' LogSkip2
+' Accumulates warning messages shown in one MsgBox at the end.
+Private Sub LogSkip2(msg As String)
+    If m_SkipLog = "" Then
+        m_SkipLog = msg
+    Else
+        m_SkipLog = m_SkipLog & vbCrLf & msg
+    End If
+End Sub
+
+' AppPerfOn2 / AppPerfOff2
+' Toggle Excel performance settings for the duration of the run.
+Private Sub AppPerfOn2()
+    Application.ScreenUpdating = False
+    Application.Calculation   = xlCalculationManual
+    Application.EnableEvents  = False
+End Sub
+
+Private Sub AppPerfOff2()
+    Application.ScreenUpdating = True
+    Application.Calculation   = xlCalculationAutomatic
+    Application.EnableEvents  = True
+    Application.DisplayAlerts = True
+End Sub
