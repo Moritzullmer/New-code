@@ -186,16 +186,15 @@ Private Sub InsertAndFill(ws As Worksheet, ent As EntityInfo, wsTB As Worksheet)
             r2 = r + 1
 
             ' Collect remaining accounts in this cluster.
+            ' A blue section-header row OR any non-account row ends the cluster.
+            ' Previously blue rows were skipped inside the loop, which caused the
+            ' entire sheet to be treated as one giant cluster.
             Do While r2 <= lastDataRow
-                If IsSkipRow(ws, r2) Then
-                    ' Blue row inside a cluster — skip over it, it is NOT a cluster boundary.
-                    r2 = r2 + 1
-                Else
-                    If Not IsAccountRow2(ws.Cells(r2, COL_ACCOUNT).Value) Then Exit Do
-                    nextAcct = CleanAccount(ws.Cells(r2, COL_ACCOUNT).Value)
-                    clusterTotal = clusterTotal + SumAccountInTB2(wsTB, nextAcct)
-                    r2 = r2 + 1
-                End If
+                If IsSkipRow(ws, r2) Then Exit Do
+                If Not IsAccountRow2(ws.Cells(r2, COL_ACCOUNT).Value) Then Exit Do
+                nextAcct = CleanAccount(ws.Cells(r2, COL_ACCOUNT).Value)
+                clusterTotal = clusterTotal + SumAccountInTB2(wsTB, nextAcct)
+                r2 = r2 + 1
             Loop
 
             ' Write TB total and difference in the first row of the cluster.
