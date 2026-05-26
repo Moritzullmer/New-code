@@ -180,7 +180,8 @@ Private Sub InsertAndFill(ws As Worksheet, ent As EntityInfo, wsTB As Worksheet)
             r = r + 1
         ElseIf IsAccountRow2(ws.Cells(r, COL_ACCOUNT).Value) Then
             ' --- First account of a new cluster ---
-            acctVal = Trim(CStr(ws.Cells(r, COL_ACCOUNT).Value))
+            ' CleanAccount strips the leading apostrophe Excel stores as text-prefix.
+            acctVal = CleanAccount(ws.Cells(r, COL_ACCOUNT).Value)
             clusterTotal = SumAccountInTB2(wsTB, acctVal)
             r2 = r + 1
 
@@ -190,8 +191,8 @@ Private Sub InsertAndFill(ws As Worksheet, ent As EntityInfo, wsTB As Worksheet)
                     ' Blue row inside a cluster — skip over it, it is NOT a cluster boundary.
                     r2 = r2 + 1
                 Else
-                    nextAcct = Trim(CStr(ws.Cells(r2, COL_ACCOUNT).Value))
                     If Not IsAccountRow2(ws.Cells(r2, COL_ACCOUNT).Value) Then Exit Do
+                    nextAcct = CleanAccount(ws.Cells(r2, COL_ACCOUNT).Value)
                     clusterTotal = clusterTotal + SumAccountInTB2(wsTB, nextAcct)
                     r2 = r2 + 1
                 End If
@@ -226,6 +227,7 @@ End Sub
 ' Skips the excluded code (EXCLUDED_CODE constant).
 ' For each entity, finds the column in ROW_DATA_LABEL that contains
 ' "DATA" — that column is stored as DataCol and used for comparisons.
+' Entities with no "DATA" column in ROW_DATA_LABEL are marked Skipped.
 Private Sub FindEntityColumns2(ws As Worksheet, _
                                 ByRef entities() As EntityInfo, _
                                 ByRef entCount As Long)
@@ -253,7 +255,8 @@ Private Sub FindEntityColumns2(ws As Worksheet, _
                 c = c + spanCols
             Else
                 ' Find the "DATA" column within this entity's span in ROW_DATA_LABEL.
-                dataCol = c   ' fallback: use first column if "DATA" not found
+                ' If no "DATA" label is found, skip this entity entirely.
+                dataCol = 0
                 For dc = c To c + spanCols - 1
                     If Trim(CStr(ws.Cells(ROW_DATA_LABEL, dc).Value)) = "DATA" Then
                         dataCol = dc
@@ -267,7 +270,8 @@ Private Sub FindEntityColumns2(ws As Worksheet, _
                 entities(entCount).LastCol   = c + spanCols - 1
                 entities(entCount).DataCol   = dataCol
                 entities(entCount).InsertCol = c + spanCols
-                entities(entCount).Skipped   = False
+                ' Mark as skipped when no DATA column found — no columns will be inserted.
+                entities(entCount).Skipped   = (dataCol = 0)
                 entCount = entCount + 1
 
                 c = c + spanCols
@@ -316,15 +320,26 @@ End Function
 ' UTILITY FUNCTIONS
 ' =============================================================
 
-' IsAccountRow2
-' Returns True if the cell value looks like an account number:
-' starts with a digit (0-9) and contains a hyphen (e.g. "1111-2050").
-' Adjust the pattern here if the account number format differs.
-Private Function IsAccountRow2(cellVal As Variant) As Boolean
+' CleanAccount
+' Strips the leading apostrophe that Excel stores when a number is
+' forced to text (e.g. '1140013400 → 1140013400).
+Private Function CleanAccount(cellVal As Variant) As String
     Dim s As String
     s = Trim(CStr(cellVal))
+    If Left(s, 1) = "'" Then s = Mid(s, 2)
+    CleanAccount = Trim(s)
+End Function
+
+' IsAccountRow2
+' Returns True if the cell value looks like an account number:
+' starts with a digit (0-9) after stripping any leading apostrophe.
+' Works for both hyphenated codes ("1111-2050") and plain numeric
+' codes ("1140013400").
+Private Function IsAccountRow2(cellVal As Variant) As Boolean
+    Dim s As String
+    s = CleanAccount(cellVal)
     If Len(s) = 0 Then IsAccountRow2 = False : Exit Function
-    IsAccountRow2 = (s Like "[0-9]*") And (InStr(s, "-") > 0)
+    IsAccountRow2 = (s Like "[0-9]*")
 End Function
 
 ' IsSkipRow
