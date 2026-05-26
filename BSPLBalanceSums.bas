@@ -310,6 +310,7 @@ Private Function SumAccountInTB2(wsTB As Worksheet, accountCode As String) As Do
     Dim r     As Long
 
     If wsTB Is Nothing Then SumAccountInTB2 = 0 : Exit Function
+    If Len(accountCode) < 4 Then SumAccountInTB2 = 0 : Exit Function
 
     lastR = LastUsedRow2(wsTB, TB_COL_ACCT)
     If lastR < TB_ROW_START Then SumAccountInTB2 = 0 : Exit Function
@@ -350,7 +351,8 @@ End Function
 Private Function IsAccountRow2(cellVal As Variant) As Boolean
     Dim s As String
     s = CleanAccount(cellVal)
-    If Len(s) = 0 Then IsAccountRow2 = False : Exit Function
+    ' Require at least 4 characters so bare "0" / short numerics are not treated as account codes.
+    If Len(s) < 4 Then IsAccountRow2 = False : Exit Function
     IsAccountRow2 = (s Like "[0-9]*")
 End Function
 
