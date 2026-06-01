@@ -441,9 +441,8 @@ Private Sub AddClassificationColumn(ws As Worksheet)
         If acct = "" Then GoTo NextRow   ' skip blank / subtotal rows
 
         ' Classify
-        Dim cls       As String
-        Dim firstChar As String : firstChar = Left(acct, 1)
-        If firstChar = "6" Or firstChar = "7" Or firstChar = "8" Then
+        Dim cls As String
+        If IsPLAccount(acct) Then
             cls = "PL"
         Else
             cls = "BS"
@@ -502,25 +501,67 @@ Private Sub T9_AppendSummaryRef(wb As Workbook)
     ws.Cells(lastR + 2, 1).Value = _
         "Please refer to our procedure description of the Macro Process we used for the JE Testing. " & _
         "Please refer to <2.4.2.0020>."
+
+    ' Note on the adapted TB PY vs TB CY comparison logic (see T10_HighlightTBComparison)
+    ws.Cells(lastR + 4, 1).Value = _
+        "TB comparison (TB PY vs TB CY): balance-sheet accounts that appear only in TB PY with a " & _
+        "zero ending balance in TB PY are noted as most likely closed (clean closure, no issue), " & _
+        "rather than merely flagged as only appearing in TB PY. P&L accounts are treated as before."
 End Sub
 
 ' =============================================================
-' T10 — TB_Comparison: yellow highlight for "Only TB24" / "Only TB25"
-' Applies solid fill #FFEB9C = RGB(255,235,156) across cols A-E.
+' T10 — TB_Comparison: highlight + closed-account commentary
+'
+' Highlighting (unchanged):
+'   Yellow fill #FFEB9C = RGB(255,235,156) across cols A-E for rows whose
+'   Status (col E) is "Only TB24" or "Only TB25".
+'
+' Closed-account commentary (new):
+'   For rows where Status = "Only TB24" (account present only in the
+'   prior-year TB), the logic is adapted by classification:
+'     • PL accounts (Kontonummer starts 6/7/8): no change in logic.
+'     • BS accounts: if the TB PY ending balance is 0, the account was
+'       closed cleanly, so we note it was most likely closed instead of
+'       merely flagging that it only appears in TB PY. A non-zero PY
+'       balance is left as-is (still warrants attention).
+'   The note is written to a new "Comment" column (col F).
+'
+' TB_Comparison column assumptions — adjust the *_COL constants below if
+' the source layout differs:
+'   A = Kontonummer   C = TB PY (TB24) ending balance   E = Status   F = Comment
 ' =============================================================
 Private Sub T10_HighlightTBComparison(wb As Workbook)
 
     Dim ws As Worksheet : Set ws = GetSheet(wb, "TB_Comparison")
     If ws Is Nothing Then Exit Sub
 
-    Dim lastR As Long : lastR = LastRow(ws, 5)   ' col E = Status
+    Const KONTO_COL   As Long = 1   ' A = Kontonummer
+    Const TBPY_COL    As Long = 3   ' C = TB PY (TB24) ending balance
+    Const STATUS_COL  As Long = 5   ' E = Status
+    Const COMMENT_COL As Long = 6   ' F = Comment (new)
+
+    ws.Cells(1, COMMENT_COL).Value = "Comment"   ' header for the new column
+
+    Dim lastR As Long : lastR = LastRow(ws, STATUS_COL)   ' col E = Status
     Dim i     As Long
 
     For i = 2 To lastR
         Dim statusVal As String
-        statusVal = Trim(CStr(ws.Cells(i, 5).Value))
+        statusVal = Trim(CStr(ws.Cells(i, STATUS_COL).Value))
+
+        ' Highlight rows present in only one TB (unchanged behaviour)
         If statusVal = "Only TB24" Or statusVal = "Only TB25" Then
             ws.Range(ws.Cells(i, 1), ws.Cells(i, 5)).Interior.Color = RGB(255, 235, 156)
+        End If
+
+        ' Closed-account commentary for prior-year-only BS accounts
+        If statusVal = "Only TB24" Then
+            If Not IsPLAccount(CStr(ws.Cells(i, KONTO_COL).Value)) Then
+                If ParseGermanNumber(ws.Cells(i, TBPY_COL).Value) = 0 Then
+                    ws.Cells(i, COMMENT_COL).Value = _
+                        "Account most likely closed (zero ending balance in TB PY)."
+                End If
+            End If
         End If
     Next i
 End Sub
@@ -681,6 +722,16 @@ End Function
 ' Returns the last row that has data in the specified column.
 Private Function LastRow(ws As Worksheet, col As Long) As Long
     LastRow = ws.Cells(ws.Rows.Count, col).End(xlUp).Row
+End Function
+
+' IsPLAccount
+' Returns True if the Kontonummer is a P&L account (first digit 6, 7, or 8),
+' else False (treated as a balance-sheet account). This is the single source
+' of the PL/BS classification rule used by AddClassificationColumn (T6/T7)
+' and the TB_Comparison commentary (T10).
+Private Function IsPLAccount(kontonummer As String) As Boolean
+    Dim firstChar As String : firstChar = Left(Trim(kontonummer), 1)
+    IsPLAccount = (firstChar = "6" Or firstChar = "7" Or firstChar = "8")
 End Function
 
 ' ParseGermanNumber
